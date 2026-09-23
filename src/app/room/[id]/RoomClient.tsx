@@ -3,6 +3,65 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { MediaConnection, Peer } from "peerjs";
+import {
+  Avatar,
+  BottomSheet,
+  Button,
+  IconButton,
+  Icons,
+  StatusPill,
+  ToastStack,
+  VideoPlaceholder,
+  pushToast,
+  type Toast,
+} from "@/components/ui";
+
+/* Human-readable error mapping (§28) — never show raw WebRTC codes. */
+function friendlyError(raw: string): { title: string; body: string } {
+  const r = raw.toLowerCase();
+  if (r.includes("permission") || r.includes("notallowed") || r.includes("denied"))
+    return {
+      title: "Camera and mic are blocked",
+      body: "Your browser blocked access. Allow camera and microphone, then try again.",
+    };
+  if (r.includes("no camera") || r.includes("notfound") || r.includes("no microphone") || r.includes("no mic"))
+    return {
+      title: "No camera or microphone found",
+      body: "We couldn't find a device to send. Check your hardware, then try again.",
+    };
+  if (r.includes("busy") || r.includes("notreadable") || r.includes("track"))
+    return {
+      title: "Camera or mic is busy",
+      body: "Another app may be using it. Close other call apps and try again.",
+    };
+  if (r.includes("offline") || r.includes("not found") || r.includes("peer-unavailable") || r.includes("host"))
+    return {
+      title: "We couldn't reach the other person",
+      body: "They may not be on this page yet. Ask them to open the invite link and keep the tab open.",
+    };
+  if (r.includes("full") || r.includes("1:1") || r.includes("third"))
+    return {
+      title: "This call is full",
+      body: "E-Meet calls are 1-to-1. Only two people can join.",
+    };
+  if (r.includes("deleted") || r.includes("410") || r.includes("never be reused"))
+    return {
+      title: "This room no longer exists",
+      body: "It was permanently deleted and codes are never reused. Ask for a fresh invite link.",
+    };
+  if (r.includes("signaling") || r.includes("network") || r.includes("socket") || r.includes("reconnect"))
+    return {
+      title: "Connection is unstable",
+      body: "Try moving closer to your Wi-Fi router, then retry.",
+    };
+  return { title: "Something didn't work", body: raw };
+}
+
+function buzz(pattern: number | number[] = 10) {
+  try {
+    (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean }).vibrate?.(pattern);
+  } catch {}
+}
 
 type Status =
   | "initializing"
@@ -32,9 +91,18 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [roomDeleted, setRoomDeleted] = useState(false);
   const [remotePeerId, setRemotePeerId] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [controlsHidden, setControlsHidden] = useState(false);
+  const [micPulse, setMicPulse] = useState(0);
+  const prevStatusRef = useRef<Status>("initializing");
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  // Dedicated audio element guarantees the remote audio track plays even if
+  // the remote <video> autoplay (with audio) is blocked or video is disabled.
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const callRef = useRef<MediaConnection | null>(null);
@@ -89,7 +157,15 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       try { t.stop(); } catch {}
     });
     localStreamRef.current = null;
+    try {
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.pause();
+        remoteAudioRef.current.srcObject = null;
+      }
+    } catch {}
     setHasRemote(false);
+    setAudioBlocked(false);
   }, []);
 
   // Ensure cleanup on unmount + beforeunload (ephemeral)
@@ -168,6 +244,50 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     };
   }, [roomId, cleanup, roomDeleted]);
 
+  // Remote voice plays ONLY through the hidden <audio> element; the
+  // <video> element gets a video-only stream and stays muted so the same
+  // audio track is never rendered twice (louder/phasing/echo).
+  const playMedia = useCallback((el: HTMLMediaElement | null, stream: MediaStream, opts: { audible: boolean }) => {
+    if (!el) return false;
+    el.srcObject = stream;
+    try {
+      el.muted = !opts.audible;
+      el.volume = 1;
+    } catch {}
+    const p = el.play();
+    if (p && typeof p.catch === "function") {
+      p.catch(() => {
+        if (opts.audible) setAudioBlocked(true);
+      });
+    }
+    return true;
+  }, []);
+
+  const attachRemoteStream = useCallback(
+    (stream: MediaStream) => {
+      // Split kinds so <video> can never emit audio even as a fallback.
+      const videoOnly =
+        stream.getVideoTracks().length > 0 ? new MediaStream(stream.getVideoTracks()) : null;
+      const audioOnly =
+        stream.getAudioTracks().length > 0 ? new MediaStream(stream.getAudioTracks()) : null;
+      const videoStream = videoOnly ?? stream;
+      const audioStream = audioOnly ?? stream;
+
+      if (!playMedia(remoteVideoRef.current, videoStream, { audible: false })) {
+        // ref not mounted yet — retry shortly so remote video is not dropped
+        setTimeout(() => {
+          playMedia(remoteVideoRef.current, videoStream, { audible: false });
+        }, 50);
+      }
+      if (!playMedia(remoteAudioRef.current, audioStream, { audible: true })) {
+        setTimeout(() => {
+          playMedia(remoteAudioRef.current, audioStream, { audible: true });
+        }, 50);
+      }
+    },
+    [playMedia]
+  );
+
   const attachStream = useCallback(
     (video: HTMLVideoElement | null, stream: MediaStream) => {
       if (!video) return;
@@ -179,6 +299,44 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     []
   );
 
+  // Browsers may block remote audio until a user gesture — retry on click/key.
+  // Only the hidden <audio> element gates the flag; <video> is muted by
+  // design (see attachRemoteStream) so its play() result is irrelevant.
+  const unlockRemoteAudio = useCallback(async () => {
+    const v = remoteVideoRef.current;
+    if (v) {
+      try {
+        v.muted = true;
+        await v.play();
+      } catch {}
+    }
+    const a = remoteAudioRef.current;
+    if (!a) return;
+    try {
+      a.muted = false;
+      a.volume = 1;
+      await a.play();
+      setAudioBlocked(false);
+    } catch {
+      // still blocked — keep the "Tap to enable" prompt
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!audioBlocked) return;
+    const onGesture = () => {
+      unlockRemoteAudio();
+    };
+    window.addEventListener("click", onGesture);
+    window.addEventListener("touchend", onGesture);
+    window.addEventListener("keydown", onGesture);
+    return () => {
+      window.removeEventListener("click", onGesture);
+      window.removeEventListener("touchend", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+  }, [audioBlocked, unlockRemoteAudio]);
+
   // Keep local preview attached when ref mounts or stream changes
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current) {
@@ -189,19 +347,32 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const toggleMic = useCallback(() => {
     const stream = localStreamRef.current;
     if (!stream) return;
-    const track = stream.getAudioTracks()[0];
-    if (!track) return;
-    track.enabled = !track.enabled;
-    setMicOn(track.enabled);
+    const tracks = stream.getAudioTracks();
+    if (!tracks.length) return;
+    // Toggle ALL audio tracks so no mic is left half-muted (some devices
+    // expose >1 track). Next state is the inverse of "any enabled".
+    const next = !tracks.some((t) => t.enabled);
+    tracks.forEach((t) => {
+      t.enabled = next;
+    });
+    setMicOn(next);
+    setMicPulse((n) => n + 1);
+    buzz(10);
+    pushToast(setToasts, next ? "Microphone on" : "Microphone muted");
   }, []);
 
   const toggleCam = useCallback(() => {
     const stream = localStreamRef.current;
     if (!stream) return;
-    const track = stream.getVideoTracks()[0];
-    if (!track) return;
-    track.enabled = !track.enabled;
-    setCamOn(track.enabled);
+    const tracks = stream.getVideoTracks();
+    if (!tracks.length) return;
+    const next = !tracks.some((t) => t.enabled);
+    tracks.forEach((t) => {
+      t.enabled = next;
+    });
+    setCamOn(next);
+    buzz(10);
+    pushToast(setToasts, next ? "Camera on" : "Camera turned off");
   }, []);
 
   const handleLeave = useCallback(() => {
@@ -249,6 +420,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     try {
       await navigator.clipboard.writeText(inviteLink);
       setCopied(true);
+      buzz(10);
+      pushToast(setToasts, "Link copied");
       setTimeout(() => setCopied(false), 2000);
     } catch {
       // clipboard requires secure context; UI already explains HTTPS needed
@@ -264,50 +437,122 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Media devices not available — HTTPS required.");
       }
+      // Preserve user's mute choices — a fresh getUserMedia defaults to
+      // enabled, which would otherwise unmute a muted user and look like a
+      // one-way/streaming bug.
+      const wasMicOn = localStreamRef.current
+        ? localStreamRef.current.getAudioTracks().some((t) => t.enabled)
+        : micOn;
+      const wasCamOn = localStreamRef.current
+        ? localStreamRef.current.getVideoTracks().some((t) => t.enabled)
+        : camOn;
       const newStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: { echoCancellation: true, noiseSuppression: true },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const newAudio = newStream.getAudioTracks()[0];
+      const newVideo = newStream.getVideoTracks()[0];
+      if (!newAudio) {
+        newStream.getTracks().forEach((t) => {
+          try { t.stop(); } catch {}
+        });
+        throw new Error("No microphone found — voice would be one-way. Check mic and retry.");
+      }
+      newStream.getAudioTracks().forEach((t) => {
+        t.enabled = wasMicOn;
+      });
+      newStream.getVideoTracks().forEach((t) => {
+        t.enabled = wasCamOn;
       });
       const oldStream = localStreamRef.current;
       localStreamRef.current = newStream;
       if (localVideoRef.current) attachStream(localVideoRef.current, newStream);
-      setMicOn(newStream.getAudioTracks().some((t) => t.enabled));
-      setCamOn(newStream.getVideoTracks().some((t) => t.enabled));
+      setMicOn(wasMicOn);
+      setCamOn(wasCamOn);
       oldStream?.getTracks().forEach((t) => t.stop());
 
-      // Replace tracks in existing peer connection without renegotiation
+      // Replace tracks in existing peer connection without renegotiation.
+      // sender.track can be null after the old track ended — resolve kind via
+      // transceivers (receiver.track survives) instead of guessing by order.
       const pc = (callRef.current as unknown as { peerConnection?: RTCPeerConnection })?.peerConnection;
-      if (pc) {
-        const senders = pc.getSenders();
-        for (const sender of senders) {
-          if (sender.track?.kind === "video") {
-            const vt = newStream.getVideoTracks()[0];
-            if (vt) await sender.replaceTrack(vt).catch(() => {});
-          }
-          if (sender.track?.kind === "audio") {
-            const at = newStream.getAudioTracks()[0];
-            if (at) await sender.replaceTrack(at).catch(() => {});
-          }
+      let audioReplaced = false;
+      let videoReplaced = false;
+      const markReplaced = async (sender: RTCRtpSender, track: MediaStreamTrack, kind: "audio" | "video") => {
+        try {
+          await sender.replaceTrack(track);
+          if (kind === "audio") audioReplaced = true;
+          else videoReplaced = true;
+        } catch {
+          // keep flag false so fallback/error path runs
         }
-      } else if (callRef.current && peerRef.current && !isHost) {
-        // fallback: re-call if no senders API
-        callRef.current.close();
+      };
+      if (pc) {
+        try {
+          const senders = pc.getSenders();
+          const kindBySender = new Map<RTCRtpSender, string>();
+          try {
+            for (const tr of pc.getTransceivers()) {
+              const k =
+                (tr as unknown as { kind?: string }).kind ??
+                tr.receiver?.track?.kind ??
+                tr.sender?.track?.kind;
+              if (k && tr.sender) kindBySender.set(tr.sender, k);
+            }
+          } catch {}
+          for (const sender of senders) {
+            const kind = sender.track?.kind ?? kindBySender.get(sender);
+            if (kind === "audio" && newAudio && !audioReplaced) {
+              await markReplaced(sender, newAudio, "audio");
+            } else if (kind === "video" && newVideo && !videoReplaced) {
+              await markReplaced(sender, newVideo, "video");
+            }
+          }
+        } catch {}
+      }
+      if ((!audioReplaced || !videoReplaced) && callRef.current && peerRef.current && !isHost) {
+        // fallback: re-call if replaceTrack missed (e.g. no senders API)
+        try { callRef.current.close(); } catch {}
         const call = peerRef.current.call(roomId, newStream);
         if (call) {
           callRef.current = call;
           call.on("stream", (rs) => {
-            if (remoteVideoRef.current) attachStream(remoteVideoRef.current, rs);
+            attachRemoteStream(rs);
             setHasRemote(true);
+            setAudioBlocked(false);
             setStatus("connected");
           });
+          call.on("close", () => {
+            setStatus("ended");
+            setHasRemote(false);
+            try {
+              if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+              if (remoteAudioRef.current) {
+                remoteAudioRef.current.pause();
+                remoteAudioRef.current.srcObject = null;
+              }
+            } catch {}
+            if (callRef.current === call) callRef.current = null;
+          });
+          call.on("error", (e) => {
+            console.error(e);
+            setError((e as Error).message || "Re-call failed");
+            setStatus((s) => (s === "connected" ? s : "error"));
+          });
         }
+      }
+      if ((!audioReplaced || !videoReplaced) && isHost) {
+        // Host has no re-call path in the 1:1 model — surface instead of
+        // silently leaving the guest with frozen/no audio.
+        setError(
+          "Re-init swapped local media but could not publish it (replaceTrack failed). Ask the guest to rejoin or reload both tabs."
+        );
       }
     } catch (e) {
       const err = e as Error;
       if (err.name === "NotAllowedError") setError("Camera/mic permission denied. Allow and try Re-init.");
       else setError(err.message || "Failed to re-init media.");
     }
-  }, [attachStream, isHost, roomId]);
+  }, [attachRemoteStream, attachStream, isHost, roomId, micOn, camOn]);
 
   // Core WebRTC setup
   useEffect(() => {
@@ -333,9 +578,17 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: { echoCancellation: true, noiseSuppression: true },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        // Fail fast on missing mic — otherwise the call connects video-only
+        // and looks like "one side can't be heard".
+        if (!stream.getAudioTracks().length) {
+          setError("No microphone track — voice would be one-way. Check mic permission and Re-init.");
+          setStatus("error");
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
@@ -445,14 +698,27 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           } else {
             setRemotePeerId(roomId); // host is roomId — enables mutual security code immediately
 
-            // Guest: call with exponential backoff (host may not be ready yet)
+            // Guest: call with exponential backoff (host may not be ready yet).
+            // NOTE: peer.call() returns a MediaConnection even when the host
+            // is offline — the real "peer-unavailable" arrives async via
+            // peer.on("error"), so that handler retries too (see below).
             let attempts = 0;
             const maxAttempts = 3;
             const tryCall = () => {
               if (cancelled || !peer || peer.destroyed) return;
+              // Always send the LIVE local stream (re-init may have swapped it)
+              const live = localStreamRef.current ?? stream;
+              if (!live.getAudioTracks().length) {
+                setError("No microphone track — guest voice can't be sent. Re-init media.");
+                setStatus("error");
+                return;
+              }
               setStatus("connecting");
               setRetryCount(attempts);
-              const call = peer!.call(roomId, stream);
+              // Close any stale half-open call before redialing
+              try { callRef.current?.close(); } catch {}
+              callRef.current = null;
+              const call = peer!.call(roomId, live);
               if (!call) {
                 if (attempts < maxAttempts) {
                   attempts++;
@@ -464,18 +730,36 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 return;
               }
               callRef.current = call;
+              // expose retry to the peer-unavailable handler; returns true
+              // only when another attempt was actually scheduled
+              (peer as unknown as { __guestRetry?: () => boolean }).__guestRetry = () => {
+                if (cancelled) return false;
+                if (attempts < maxAttempts) {
+                  attempts++;
+                  setTimeout(tryCall, 1200 * attempts);
+                  return true;
+                }
+                return false;
+              };
               call.on("stream", (remoteStream) => {
                 if (cancelled) return;
-                if (remoteVideoRef.current) attachStream(remoteVideoRef.current, remoteStream);
-                else setTimeout(() => remoteVideoRef.current && attachStream(remoteVideoRef.current!, remoteStream), 50);
+                attachRemoteStream(remoteStream);
                 setHasRemote(true);
+                setAudioBlocked(false);
                 setStatus("connected");
               });
               call.on("close", () => {
                 if (cancelled) return;
                 setStatus("ended");
                 setHasRemote(false);
-                callRef.current = null;
+                try {
+                  if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+                  if (remoteAudioRef.current) {
+                    remoteAudioRef.current.pause();
+                    remoteAudioRef.current.srcObject = null;
+                  }
+                } catch {}
+                if (callRef.current === call) callRef.current = null;
               });
               call.on("error", (e) => {
                 console.error(e);
@@ -499,12 +783,14 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           callRef.current = call;
           setRemotePeerId(call.peer);
           setStatus("connecting");
-          call.answer(stream);
+          // Answer with the LIVE stream (not the stale init closure) so host
+          // voice keeps flowing after a Re-init media swap.
+          call.answer(localStreamRef.current ?? stream);
           call.on("stream", (remoteStream) => {
             if (cancelled) return;
-            if (remoteVideoRef.current) attachStream(remoteVideoRef.current, remoteStream);
-            else setTimeout(() => remoteVideoRef.current && attachStream(remoteVideoRef.current!, remoteStream), 50);
+            attachRemoteStream(remoteStream);
             setHasRemote(true);
+            setAudioBlocked(false);
             setStatus("connected");
           });
           call.on("close", () => {
@@ -513,6 +799,13 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             // Polling will keep it as deleted/full; show ended
             setStatus("ended");
             setHasRemote(false);
+            try {
+              if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+              if (remoteAudioRef.current) {
+                remoteAudioRef.current.pause();
+                remoteAudioRef.current.srcObject = null;
+              }
+            } catch {}
             if (callRef.current === call) callRef.current = null;
           });
           call.on("error", (e) => {
@@ -529,6 +822,14 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           const t = typed.type;
           // Narrow, exact matching — not substring
           if (t === "peer-unavailable") {
+            // Guest redials a few times — host tab may just be opening.
+            // If retries are exhausted, fall through to the terminal error
+            // instead of leaving the UI stuck on "connecting".
+            const retry = (peer as unknown as { __guestRetry?: () => boolean }).__guestRetry;
+            if (!isHost && retry && retry()) {
+              setStatus("connecting");
+              return;
+            }
             setError(`Room "${roomId}" not found or host offline. Host must open /room/${roomId}?host=true and keep tab open.`);
             setStatus("error");
           } else if (t === "unavailable-id") {
@@ -599,299 +900,362 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       });
       localStreamRef.current = null;
     };
-  }, [roomId, isHost, attachStream]);
+  }, [roomId, isHost, attachStream, attachRemoteStream]);
 
-  const statusLabel: Record<Status, string> = {
-    initializing: "Initializing secure channel…",
-    waiting: "Waiting for peer to join…",
-    connecting: retryCount ? `Connecting — retry ${retryCount}/3…` : "Connecting — negotiating E2E keys…",
-    connected: "● Live — E2E encrypted (DTLS-SRTP)",
-    ended: "Call ended — ephemeral session closed",
-    error: "Error",
+  const statusMeta: Record<Status, { label: string; tone: "neutral" | "live" | "warn" | "danger" | "info" }> = {
+    initializing: { label: "Preparing…", tone: "neutral" },
+    waiting: { label: "Waiting for peer", tone: "warn" },
+    connecting: { label: retryCount ? `Connecting · retry ${retryCount}/3` : "Connecting…", tone: "info" },
+    connected: { label: "Connected", tone: "live" },
+    ended: { label: "Ended", tone: "neutral" },
+    error: { label: "Couldn't connect", tone: "danger" },
   };
 
+  // Toast on transitions: connected / restored / ended (§29)
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    if (status === "connected" && prev !== "connected") {
+      pushToast(setToasts, "You're connected");
+      buzz([12, 40, 12]);
+    }
+    if (status === "ended" && prev === "connected") {
+      pushToast(setToasts, "Call ended");
+    }
+    prevStatusRef.current = status;
+  }, [status]);
+
+  // Auto-hide controls when idle during a call (§12: quiet when idle).
+  // Touch users keep controls; mouse users reveal on movement.
+  // Note: render forces the dock visible unless status is connected, so no
+  // reset is needed here when leaving a call.
+  useEffect(() => {
+    if (status !== "connected") return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poke = () => {
+      setControlsHidden(false);
+      if (timer) clearTimeout(timer);
+      if (window.matchMedia("(pointer: fine)").matches) {
+        timer = setTimeout(() => setControlsHidden(true), 3500);
+      }
+    };
+    poke();
+    window.addEventListener("mousemove", poke);
+    window.addEventListener("touchstart", poke, { passive: true });
+    window.addEventListener("keydown", poke);
+    return () => {
+      window.removeEventListener("mousemove", poke);
+      window.removeEventListener("touchstart", poke);
+      window.removeEventListener("keydown", poke);
+      if (timer) clearTimeout(timer);
+    };
+  }, [status]);
+
+  const friendly = error ? friendlyError(error) : null;
+  const inCall = status === "connected" || (status === "connecting" && hasRemote);
+
   return (
-    <div className="flex flex-1 flex-col min-h-screen bg-[#080808]">
-      {/* top bar */}
-      <header className="h-[56px] border-b border-white/10 flex items-center justify-between px-4 md:px-6 shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
+    <div className="flex min-h-dvh flex-1 flex-col">
+      {/* Top bar — overlays the stage during a call (§13) */}
+      <header
+        className={`z-20 flex shrink-0 items-center justify-between gap-3 px-4 pt-[calc(env(safe-area-inset-top)+12px)] md:px-6 ${
+          inCall ? "pointer-events-none absolute inset-x-0 top-0" : ""
+        }`}
+      >
+        <div className={`flex min-w-0 items-center gap-2.5 ${inCall ? "pointer-events-auto" : ""}`}>
           <button
             onClick={handleLeave}
-            className="h-8 w-8 rounded-full border border-white/15 grid place-items-center hover:bg-white/10 transition text-sm"
-            aria-label="Leave and destroy session"
+            aria-label="Leave call"
+            className="pressable glass grid h-10 w-10 shrink-0 place-items-center rounded-full text-white"
           >
-            ←
+            <Icons.Back size={17} />
           </button>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-semibold tracking-wide truncate" title={roomId}>
-                {roomId}
-              </span>
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border ${
-                  status === "connected"
-                    ? "bg-emerald-500 text-white border-emerald-500"
-                    : status === "waiting"
-                    ? "bg-amber-400 text-black border-amber-400"
-                    : status === "error"
-                    ? "bg-red-500 text-white border-red-500"
-                    : "bg-white/10 text-zinc-300 border-white/10"
-                }`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full bg-current ${status === "waiting" || status === "connecting" ? "animate-pulse" : ""}`} />
-                {statusLabel[status]}
-              </span>
-            </div>
-            <p className="text-xs text-zinc-500 truncate hidden md:block">
-              {isHost ? "You are HOST • " : "You are GUEST • "}
-              {peerId ? `peer ${peerId.slice(0, 10)}…` : "connecting signaling…"} • 1:1 • ephemeral
-              {securityCode ? ` • code ${securityCode}` : ""}
-            </p>
+          <div className="glass flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-3 pr-2">
+            <span className="truncate font-mono text-[13px] font-semibold tracking-wide" title={roomId}>
+              {roomId}
+            </span>
+            <StatusPill tone={statusMeta[status].tone} pulse={status === "waiting" || status === "connecting"}>
+              {statusMeta[status].label}
+            </StatusPill>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className={`flex shrink-0 items-center gap-2 ${inCall ? "pointer-events-auto" : ""}`}>
+          <span className="glass hidden items-center gap-1.5 rounded-full px-3 py-2 text-[11px] font-medium text-[var(--text-secondary)] sm:inline-flex">
+            <Icons.Lock size={12} /> Private call
+          </span>
           <button
             onClick={handleCopy}
-            className="hidden sm:inline-flex h-9 rounded-full bg-white text-black px-4 text-sm font-medium hover:bg-zinc-200 transition"
-          >
-            {copied ? "✓ Copied" : "Copy invite link"}
-          </button>
-          <button
-            onClick={handleCopy}
-            className="sm:hidden h-9 w-9 rounded-full bg-white text-black grid place-items-center"
             aria-label="Copy invite link"
+            className="pressable glass grid h-10 w-10 place-items-center rounded-full text-white"
+            title="Copy invite link"
           >
-            ⧉
+            {copied ? <Icons.Check size={17} /> : <Icons.Copy size={17} />}
           </button>
-          {isHost && (
-            <button
-              onClick={handleDeletePermanent}
-              disabled={isDeleting || roomDeleted}
-              className="hidden sm:inline-flex h-9 rounded-full bg-zinc-800 hover:bg-red-600 border border-red-600/30 text-white px-4 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Permanently delete room — code will never be reused"
-            >
-              {isDeleting ? "Deleting…" : roomDeleted ? "Deleted" : "Delete room"}
-            </button>
-          )}
           <button
-            onClick={handleLeave}
-            className="h-9 rounded-full bg-red-600 hover:bg-red-500 text-white px-4 text-sm font-medium transition"
+            onClick={() => setSheetOpen(true)}
+            aria-label="More options"
+            className="pressable glass grid h-10 w-10 place-items-center rounded-full text-white"
+            title="More options"
           >
-            Leave
+            <Icons.More size={18} />
           </button>
         </div>
       </header>
 
       {roomDeleted && (
-        <div className="px-4 md:px-6 py-3 bg-red-600 text-white text-sm font-medium flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-white animate-pulse" />
-          Room permanently deleted — code {roomId} will never be reused. All peers disconnected.
-          <button onClick={() => router.push("/")} className="ml-auto rounded-full bg-white text-red-600 px-3 py-1 text-xs font-semibold">Go home</button>
+        <div className="z-20 mx-4 mt-3 flex items-center gap-2 rounded-[16px] bg-[var(--danger)] px-4 py-3 text-sm font-medium text-white md:mx-6">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-white" />
+          <span>This room was permanently deleted. Codes are never reused.</span>
+          <button onClick={() => router.push("/")} className="ml-auto shrink-0 rounded-full bg-white px-3 py-1 text-xs font-semibold text-[var(--danger)]">Go home</button>
         </div>
       )}
 
-      {/* encryption banner */}
-      <div className="px-4 md:px-6 py-3 flex flex-wrap items-center gap-2 border-b border-white/5 bg-emerald-500/10">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500 text-white px-3 py-1 text-xs font-semibold">
-          🔒 End-to-end encrypted
-        </span>
-        <span className="text-xs text-zinc-400">
-          WebRTC DTLS 1.2+ • SRTP • ECDHE PFS • Media is P2P only • No recording • Signaling via WSS (handshake only) • Ephemeral • 1:1 locked • Never reused after delete
-        </span>
-        {securityCode && !roomDeleted && (
-          <span className="ml-auto text-xs font-mono text-emerald-200 border border-emerald-500/20 rounded-full px-2.5 py-1 bg-black/20">
-            Security code: {securityCode} — verify with peer
-          </span>
-        )}
-      </div>
-
-      {/* invite helper */}
-      <div className="px-4 md:px-6 py-3 flex flex-wrap gap-2 items-center text-xs">
-        <span className="text-zinc-500">Invite link:</span>
-        <code className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-zinc-200 break-all">
-          {inviteLink}
-        </code>
-        <button
-          onClick={handleCopy}
-          className="rounded-full border border-white/15 px-3 py-1.5 hover:bg-white/10 transition"
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-        {isHost && status === "waiting" && (
-          <span className="text-amber-300">Share this link — waiting for guest… keep this tab open.</span>
-        )}
-        {!isHost && status === "error" && (
-          <span className="text-red-300">Host may be offline — ask host to open with ?host=true.</span>
-        )}
-      </div>
-
-      {error && (
-        <div className="mx-4 md:mx-6 rounded-2xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-200 flex items-start justify-between gap-3">
-          <span className="break-words">{error}</span>
-          <button onClick={() => window.location.reload()} className="shrink-0 rounded-full bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-500">
-            Retry
-          </button>
+      {error && status === "error" && (
+        <div className="rise-in z-20 mx-4 mt-3 rounded-[20px] border border-[rgba(255,95,109,0.3)] bg-[rgba(255,95,109,0.08)] p-5 text-center md:mx-6">
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[rgba(255,95,109,0.15)] text-[var(--danger)]">
+            <Icons.VideoOff size={22} />
+          </div>
+          <p className="mt-3 text-[15px] font-semibold text-white">{friendly?.title}</p>
+          <p className="mx-auto mt-1 max-w-md text-[13px] leading-5 text-[var(--text-secondary)]">{friendly?.body}</p>
+          <div className="mt-4 flex justify-center gap-2">
+            <Button onClick={() => window.location.reload()}>Try again</Button>
+            <Button variant="secondary" onClick={() => router.push("/")}>Go home</Button>
+          </div>
         </div>
       )}
 
-      {/* videos */}
-      <main className="flex-1 p-4 md:p-6 flex flex-col min-h-0">
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0">
-          {/* Remote */}
-          <div className="relative rounded-[24px] overflow-hidden bg-zinc-900 border border-white/10 min-h-[280px] lg:min-h-0 flex flex-col">
-            <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
-              <span className="rounded-full bg-black/60 backdrop-blur px-3 py-1 text-xs text-white border border-white/10">
-                Remote — peer
-              </span>
-              {hasRemote && (
-                <span className="rounded-full bg-emerald-500 px-2.5 py-1 text-xs text-white font-medium">
-                  live • E2EE
-                </span>
-              )}
+      {/* Stage (§13): full-screen remote, floating self, calm states */}
+      <main className="flex min-h-0 flex-1 flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] md:px-6">
+        {status === "ended" && !roomDeleted ? (
+          <div className="rise-in mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
+            <Avatar name={roomId} size={80} />
+            <h2 className="mt-2 text-2xl font-semibold">Call ended</h2>
+            <p className="max-w-[32ch] text-[13px] leading-5 text-[var(--text-secondary)]">
+              This session is closed and nothing was stored. Start fresh whenever you like.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <Button onClick={() => window.location.reload()}>Rejoin</Button>
+              <Button variant="secondary" onClick={() => router.push("/")}>Go home</Button>
             </div>
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className={`h-full w-full object-cover bg-zinc-900 ${!hasRemote ? "hidden" : ""}`}
-            />
-            {!hasRemote && (
-              <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-                <div className="h-16 w-16 rounded-2xl bg-white/5 border border-white/10 grid place-items-center text-2xl mb-4">
-                  👤
-                </div>
-                <p className="text-sm font-medium text-white">
-                  {status === "waiting"
-                    ? "Waiting for someone to join…"
-                    : status === "connecting"
-                    ? "Connecting… (E2E handshake)"
-                    : status === "connected"
-                    ? "No remote stream"
-                    : status === "error"
-                    ? "No peer connected"
-                    : "No peer connected"}
-                </p>
-                <p className="text-xs text-zinc-500 mt-1 max-w-xs">
-                  {isHost
-                    ? "Keep this tab open and share the invite link. Guest will connect P2P automatically. Security code must match on both sides."
-                    : "If you see an error, ask the host to re-create the room and send a fresh link. Verify security code via phone."}
-                </p>
-                {status !== "connected" && status !== "error" && status !== "ended" && (
-                  <div className="mt-4 h-1.5 w-16 rounded-full bg-white/10 overflow-hidden">
-                    <div className="h-full w-1/2 bg-white/60 animate-[shimmer_1.2s_ease-in-out_infinite] rounded-full" />
+          </div>
+        ) : status === "waiting" && isHost && !hasRemote ? (
+          /* Calm waiting room (§12) */
+          <div className="rise-in mx-auto flex w-full max-w-lg flex-1 flex-col justify-center gap-4 py-8">
+            <div className="overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)]">
+              <div className="relative aspect-video">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="h-full w-full scale-x-[-1] bg-black object-cover"
+                />
+                {!camOn && (
+                  <div className="absolute inset-0">
+                    <VideoPlaceholder name="You" caption="Your camera is off — guests will see your avatar." />
                   </div>
                 )}
               </div>
-            )}
+              <div className="flex items-center justify-center gap-3 p-4">
+                <IconButton label={micOn ? "Mute microphone" : "Unmute microphone"} onClick={toggleMic} off={!micOn}>
+                  <span key={micPulse} className="mic-pop grid place-items-center">
+                    {micOn ? <Icons.Mic size={20} /> : <Icons.MicOff size={20} />}
+                  </span>
+                </IconButton>
+                <IconButton label={camOn ? "Turn camera off" : "Turn camera on"} onClick={toggleCam} off={!camOn}>
+                  {camOn ? <Icons.Video size={20} /> : <Icons.VideoOff size={20} />}
+                </IconButton>
+              </div>
+            </div>
+            <div className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--surface)] p-5 text-center">
+              <StatusPill tone="warn" pulse>Waiting for guest</StatusPill>
+              <p className="mx-auto mt-3 max-w-[36ch] text-[13px] leading-5 text-[var(--text-secondary)]">
+                Share the invite link and keep this tab open. They will connect automatically.
+              </p>
+              <code className="mt-3 block break-all rounded-[12px] border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2.5 font-mono text-xs text-[var(--text-secondary)]">
+                {inviteLink}
+              </code>
+              <Button onClick={handleCopy} variant="secondary" className="mt-3 w-full">
+                {copied ? "Copied" : "Copy invite link"}
+              </Button>
+            </div>
           </div>
+        ) : (
+          <>
+            {/* Remote stage */}
+            <div
+              className={`relative mt-3 min-h-[46dvh] flex-1 overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] ${
+                inCall ? "md:min-h-[62dvh]" : ""
+              }`}
+            >
+              {hasRemote ? (
+                <video
+                  key="remote"
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  controls={false}
+                  className="join-in h-full min-h-[46dvh] w-full bg-black object-cover"
+                />
+              ) : (
+                <VideoPlaceholder
+                  name={isHost ? "Guest" : "Host"}
+                  connecting={status === "connecting" || status === "initializing"}
+                  caption={
+                    status === "initializing"
+                      ? "Finding your connection…"
+                      : status === "connecting"
+                        ? `Connecting…${retryCount ? ` (retry ${retryCount}/3)` : ""}`
+                        : status === "error"
+                          ? "No one is here yet."
+                          : "Waiting for the other person…"
+                  }
+                />
+              )}
+              {/* Hidden voice channel — the ONLY audible remote path. */}
+              <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-          {/* Local */}
-          <div className="relative rounded-[24px] overflow-hidden bg-zinc-900 border border-white/10 min-h-[280px] lg:min-h-0 flex flex-col">
-            <div className="absolute top-3 left-3 z-10 rounded-full bg-black/60 backdrop-blur px-3 py-1 text-xs text-white border border-white/10">
-              You — local preview {peerId ? `• ${peerId.slice(0, 6)}` : ""}
-            </div>
-            <div className="absolute top-3 right-3 z-10 flex gap-1.5">
-              <span className={`rounded-full px-2.5 py-1 text-xs font-medium border ${micOn ? "bg-white text-black border-white" : "bg-red-600 text-white border-red-600"}`}>
-                {micOn ? "Mic on" : "Mic muted"}
-              </span>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-medium border ${camOn ? "bg-white text-black border-white" : "bg-red-600 text-white border-red-600"}`}>
-                {camOn ? "Cam on" : "Cam off"}
-              </span>
-            </div>
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="h-full w-full object-cover bg-zinc-900 scale-x-[-1]"
-            />
-            {!camOn && (
-              <div className="absolute inset-0 grid place-items-center bg-zinc-900/80 backdrop-blur-[2px]">
-                <div className="text-center">
-                  <div className="h-14 w-14 rounded-full bg-white/10 mx-auto grid place-items-center text-lg">📷</div>
-                  <p className="text-xs text-zinc-400 mt-2">Camera off</p>
+              {/* Top-left presence */}
+              <div className="absolute left-3 top-3 flex items-center gap-2">
+                <span className="glass rounded-full px-3 py-1.5 text-[11px] font-medium text-white">
+                  {hasRemote ? (isHost ? "Guest" : "Host") : "No one here yet"}
+                </span>
+                {hasRemote && <StatusPill tone="live" pulse>Live</StatusPill>}
+              </div>
+              {/* Mic/cam flags */}
+              <div className="absolute right-3 top-3 flex gap-1.5">
+                {!micOn && (
+                  <span className="rounded-full bg-[var(--danger)] px-2.5 py-1 text-[11px] font-medium text-white">
+                    You&apos;re muted
+                  </span>
+                )}
+                {!camOn && (
+                  <span className="glass rounded-full px-2.5 py-1 text-[11px] font-medium text-white">
+                    Camera off
+                  </span>
+                )}
+              </div>
+
+              {audioBlocked && hasRemote && (
+                <button
+                  onClick={unlockRemoteAudio}
+                  className="pressable absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-[var(--warning)] px-4 py-2.5 text-xs font-semibold text-black"
+                >
+                  Tap to enable audio
+                </button>
+              )}
+
+              {/* Floating self-preview (§13) */}
+              <div className="absolute bottom-3 right-3 w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36 md:w-48">
+                <div className="relative aspect-video">
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`h-full w-full scale-x-[-1] bg-black object-cover ${!camOn ? "invisible" : ""}`}
+                  />
+                  {!camOn && (
+                    <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
+                      <Avatar name="You" size={40} />
+                    </div>
+                  )}
                 </div>
+                <p className="bg-[rgba(10,10,12,0.85)] px-2 py-1 text-center text-[10px] text-[var(--text-secondary)]">
+                  You{!micOn ? " · muted" : ""}
+                </p>
+              </div>
+            </div>
+
+            {/* Invite strip when waiting/connecting (guest view) */}
+            {!hasRemote && (status === "waiting" || status === "connecting") && (
+              <div className="mx-auto mt-3 flex max-w-full flex-wrap items-center justify-center gap-2 text-xs text-[var(--text-secondary)]">
+                <code className="max-w-full truncate rounded-full border border-[var(--border-subtle)] bg-white/[0.04] px-3 py-1.5 font-mono">
+                  {inviteLink}
+                </code>
+                <button onClick={handleCopy} className="pressable rounded-full border border-[var(--border-subtle)] px-3 py-1.5 hover:bg-white/10">
+                  {copied ? "Copied" : "Copy"}
+                </button>
               </div>
             )}
-          </div>
-        </div>
 
-        {/* controls */}
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-          <button
-            onClick={toggleMic}
-            className={`h-12 min-w-12 rounded-full px-6 flex items-center justify-center gap-2 text-sm font-medium border transition ${
-              micOn
-                ? "bg-white text-black border-white hover:bg-zinc-200"
-                : "bg-red-600 text-white border-red-600 hover:bg-red-500"
-            }`}
-          >
-            <span className="text-base">{micOn ? "🎙️" : "🔇"}</span> {micOn ? "Mute" : "Unmute"}
+            {/* Control dock (§14–15) — floats, hides when idle */}
+            <div
+              className={`sticky bottom-[calc(env(safe-area-inset-bottom)+12px)] z-20 mt-3 flex justify-center transition-all duration-300 ${
+                controlsHidden && status === "connected" ? "translate-y-3 opacity-0" : "translate-y-0 opacity-100"
+              }`}
+            >
+              <div className="glass flex items-center gap-2 rounded-full p-2 shadow-2xl">
+                <IconButton label={micOn ? "Mute microphone" : "Unmute microphone"} onClick={toggleMic} off={!micOn}>
+                  <span key={micPulse} className="mic-pop grid place-items-center">
+                    {micOn ? <Icons.Mic size={20} /> : <Icons.MicOff size={20} />}
+                  </span>
+                </IconButton>
+                <IconButton label={camOn ? "Turn camera off" : "Turn camera on"} onClick={toggleCam} off={!camOn}>
+                  {camOn ? <Icons.Video size={20} /> : <Icons.VideoOff size={20} />}
+                </IconButton>
+                <IconButton label="More options" onClick={() => setSheetOpen(true)}>
+                  <Icons.More size={20} />
+                </IconButton>
+                <IconButton label="End call" danger onClick={() => { buzz(30); handleLeave(); }}>
+                  <Icons.PhoneOff size={20} />
+                </IconButton>
+              </div>
+            </div>
+
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[11px] text-[var(--text-muted)]">
+              <Icons.Lock size={11} /> Private call · nothing is recorded or stored
+            </p>
+          </>
+        )}
+      </main>
+
+      <ToastStack toasts={toasts} />
+
+      {/* More sheet (§30) — technical details live here, not primary UI (§38) */}
+      <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Call options">
+        <div className="flex flex-col gap-2">
+          {securityCode && (
+            <div className="flex items-center justify-between rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3">
+              <div>
+                <p className="text-xs text-[var(--text-muted)]">Security code — read it aloud to verify</p>
+                <p className="font-mono text-sm font-semibold tracking-widest">{securityCode}</p>
+              </div>
+              <Icons.Lock size={18} className="text-[var(--success)]" />
+            </div>
+          )}
+          <button onClick={handleCopy} className="pressable flex items-center gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3 text-left text-sm">
+            {copied ? <Icons.Check size={18} /> : <Icons.Copy size={18} />}
+            {copied ? "Invite link copied" : "Copy invite link"}
           </button>
           <button
-            onClick={toggleCam}
-            className={`h-12 min-w-12 rounded-full px-6 flex items-center justify-center gap-2 text-sm font-medium border transition ${
-              camOn
-                ? "bg-white text-black border-white hover:bg-zinc-200"
-                : "bg-red-600 text-white border-red-600 hover:bg-red-500"
-            }`}
+            onClick={() => { setSheetOpen(false); handleReinit(); }}
+            className="pressable flex items-center gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3 text-left text-sm"
           >
-            <span className="text-base">{camOn ? "📹" : "🚫"}</span> {camOn ? "Stop video" : "Start video"}
-          </button>
-          <button
-            onClick={handleLeave}
-            className="h-12 rounded-full bg-red-600 hover:bg-red-500 text-white px-8 text-sm font-medium transition border border-red-600"
-          >
-            End call
-          </button>
-          <button
-            onClick={handleReinit}
-            className="h-12 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 text-white px-6 text-sm font-medium transition"
-          >
-            ↻ Re-init media
+            <Icons.Refresh size={18} /> Reconnect camera & mic
           </button>
           {isHost && (
             <button
-              onClick={handleDeletePermanent}
+              onClick={() => { setSheetOpen(false); handleDeletePermanent(); }}
               disabled={isDeleting || roomDeleted}
-              className="h-12 rounded-full bg-zinc-900 hover:bg-red-600 border border-red-600/40 text-white px-6 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Permanently delete room"
+              className="pressable flex items-center gap-3 rounded-[14px] border border-[rgba(255,95,109,0.35)] bg-[rgba(255,95,109,0.08)] px-4 py-3 text-left text-sm text-[#ffb3bb] disabled:opacity-50"
             >
-              {isDeleting ? "Deleting…" : roomDeleted ? "✓ Deleted" : "🗑 Delete room permanently"}
+              <Icons.Trash size={18} />
+              {isDeleting ? "Deleting…" : roomDeleted ? "Room deleted" : "Delete room permanently"}
             </button>
           )}
+          <button
+            onClick={handleLeave}
+            className="pressable flex items-center gap-3 rounded-[14px] bg-[var(--danger)] px-4 py-3 text-left text-sm font-semibold text-white"
+          >
+            <Icons.PhoneOff size={18} /> Leave call
+          </button>
+          <p className="px-1 pt-1 text-[11px] leading-4 text-[var(--text-muted)]">
+            {isHost ? "Host" : "Guest"} · {roomId} · 1:1 ephemeral · P2P encrypted
+          </p>
         </div>
-
-        <p className="mt-3 text-center text-xs text-zinc-500">
-          Ephemeral • No logs • P2P only • If permissions were denied, allow camera/mic and press Re-init. Works only on HTTPS (localhost or Vercel). Security code proves no MITM — compare via external channel.
-        </p>
-        <details className="mt-3 mx-auto max-w-3xl rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-xs text-zinc-400">
-          <summary className="cursor-pointer font-medium text-zinc-200">How “most secure” is implemented</summary>
-          <ul className="mt-2 list-disc pl-5 space-y-1 leading-5">
-            <li><b className="text-zinc-200">CSPRNG IDs:</b> crypto.getRandomValues (52-bit+), not Math.random; validated strict regex, peer ID is room ID.</li>
-            <li><b className="text-zinc-200">E2EE:</b> WebRTC DTLS 1.2+ with ECDHE + SRTP, PFS; SRTP keys never leave browser; TLS 1.3 to signaling.</li>
-            <li><b className="text-zinc-200">Signaling:</b> WSS to PeerJS cloud only for SDP/ICE handshake; no media relay; self-hostable; auto-destroy on leave.</li>
-            <li><b className="text-zinc-200">Headers:</b> HSTS preload, CSP (frame-ancestors none, connect-src pin), COOP same-origin, Permissions-Policy camera/mic self only, X-Frame Deny.</li>
-            <li><b className="text-zinc-200">1:1 lock:</b> single MediaConnection — API blocks 3rd join (403 Full) and Peer rejects extra calls; no multi-party leak.</li>
-            <li><b className="text-zinc-200">No reuse:</b> host “Delete room permanently” tombstones ID (410) — file+memory persisted, never reusable; full rooms also sealed.</li>
-            <li><b className="text-zinc-200">Verification:</b> derived SHA-256 security code (roomId:peerId) shown to both peers — compare out-of-band to detect MITM.</li>
-            <li><b className="text-zinc-200">Ephemeral:</b> tracks stopped + peer destroyed on leave/beforeunload/room change; no history, no recording.</li>
-          </ul>
-        </details>
-      </main>
-
-      <footer className="px-4 md:px-6 py-4 border-t border-white/10 text-center text-xs text-zinc-500">
-        <div>
-          Built with Next.js 16 + PeerJS + WebRTC • Encrypted P2P • Minimal by
-          design
-        </div>
-        <div className="mt-1 font-medium text-zinc-300">
-          Designed and Developed by Yash Shekhar
-        </div>
-      </footer>
-
-      <style>{`@keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(200%)} }`}</style>
+      </BottomSheet>
     </div>
   );
 }

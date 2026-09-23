@@ -13,9 +13,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "E-Meet — E2E Encrypted 1:1 Video",
+  title: "E-Meet — Private 1:1 Video",
   description:
-    "Minimal, highly secure peer-to-peer video calling. End-to-end encrypted via WebRTC DTLS-SRTP. Media is P2P only — ephemeral room IDs tombstoned, no media stored.",
+    "Simple, private 1-to-1 video conversations without the clutter. End-to-end encrypted, peer-to-peer, ephemeral.",
+  themeColor: "#070709",
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#070709",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -24,8 +32,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#0a0a0a] text-zinc-100">
-        {children}
+      <body className="min-h-dvh flex flex-col text-[var(--text-primary)]">
+        <div className="ambient-blob ambient-blob-a" aria-hidden />
+        <div className="ambient-blob ambient-blob-b" aria-hidden />
+        <div className="relative z-10 flex min-h-dvh flex-col">{children}</div>
       </body>
     </html>
   );

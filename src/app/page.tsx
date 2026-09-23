@@ -1,7 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  Avatar,
+  Button,
+  EmptyState,
+  Icons,
+  StatusPill,
+} from "@/components/ui";
 
 // Room ID: 10 chars base36 ≈ 52 bits entropy, CSPRNG only
 export const ROOM_ID_REGEX = /^[A-Z0-9]{6}-[A-Z0-9]{4}$/;
@@ -29,13 +36,38 @@ function normalizeRoomId(input: string): string {
   return input.trim().toUpperCase();
 }
 
+type Recent = { id: string; at: number; role: "host" | "guest" };
+
+function loadRecents(): Recent[] {
+  try {
+    const raw = localStorage.getItem("emeet_recents");
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as Recent[];
+    return Array.isArray(arr) ? arr.slice(0, 5) : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function Home() {
   const router = useRouter();
   const [joinId, setJoinId] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-
   const [createError, setCreateError] = useState<string | null>(null);
+  const [recents, setRecents] = useState<Recent[]>([]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is external, unreadable during SSR
+    setRecents(loadRecents());
+  }, []);
+
+  const remember = (id: string, role: "host" | "guest") => {
+    try {
+      const next = [{ id, at: Date.now(), role }, ...loadRecents()].slice(0, 5);
+      localStorage.setItem("emeet_recents", JSON.stringify(next));
+    } catch {}
+  };
 
   const handleCreate = async () => {
     if (creating) return;
@@ -56,6 +88,7 @@ export default function Home() {
           if (data.hostToken) {
             try { localStorage.setItem(`host_token_${id}`, data.hostToken); } catch {}
           }
+          remember(id, "host");
           router.push(`/room/${encodeURIComponent(id)}?host=true`);
           setTimeout(() => setCreating(false), 2000);
           return;
@@ -63,17 +96,17 @@ export default function Home() {
         // 410 deleted → never reusable, generate new; 409 exists → retry
         if (res.status === 410 || res.status === 409) {
           if (attempt === 2) {
-            setCreateError(data.error || "Room ID collision — try again.");
+            setCreateError("That room code collided — try again.");
             setCreating(false);
             return;
           }
           continue;
         }
-        setCreateError(data.error || "Failed to create room");
+        setCreateError("We couldn't create the call. Check your connection and try again.");
         setCreating(false);
         return;
-      } catch (e) {
-        setCreateError((e as Error).message || "Network error creating room");
+      } catch {
+        setCreateError("We couldn't create the call. Check your connection and try again.");
         setCreating(false);
         return;
       }
@@ -86,124 +119,111 @@ export default function Home() {
     setJoinError(null);
     const trimmed = normalizeRoomId(joinId);
     if (!trimmed) {
-      setJoinError("Enter a room code.");
+      setJoinError("Enter a room code to join.");
       return;
     }
     if (trimmed.length !== ROOM_ID_MAX_LEN) {
-      setJoinError(`Room ID must be ${ROOM_ID_MAX_LEN} chars (like A1B2CD-X9Y2).`);
+      setJoinError(`Room codes are ${ROOM_ID_MAX_LEN} characters, like A1B2CD-X9Y2.`);
       return;
     }
     if (!ROOM_ID_REGEX.test(trimmed)) {
-      setJoinError("Invalid format — only A-Z, 0-9 and single hyphen at position 7.");
+      setJoinError("That code doesn't look right — letters, numbers and one hyphen only.");
       return;
     }
+    remember(trimmed, "guest");
     router.push(`/room/${encodeURIComponent(trimmed)}`);
   };
 
   return (
-    <div className="flex flex-1 flex-col min-h-screen">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 md:px-10 py-6 border-b border-white/10">
+    <div className="flex flex-1 flex-col">
+      {/* Minimal top nav (§31) */}
+      <header className="flex items-center justify-between px-5 py-5 md:px-10">
         <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-white text-black grid place-items-center font-bold text-sm">
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[image:var(--gradient-accent)] text-sm font-bold text-white">
             E²
           </div>
           <div>
-            <p className="font-semibold leading-none tracking-tight">E-Meet</p>
-            <p className="text-xs text-zinc-400">E2E Encrypted • P2P • 1:1</p>
+            <p className="text-[15px] font-semibold leading-none">E-Meet</p>
+            <p className="mt-1 flex items-center gap-1 text-[11px] text-[var(--text-muted)]">
+              <Icons.Lock size={11} /> Private 1:1 calls
+            </p>
           </div>
         </div>
-        <a
-          href="https://webrtc.org/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-zinc-400 hover:text-white transition"
-          title="WebRTC DTLS-SRTP learns more"
-        >
-          How encryption works →
-        </a>
+        <StatusPill tone="live">Encrypted</StatusPill>
       </header>
 
-      <main className="flex flex-1 flex-col items-center justify-center px-6 py-12">
-        <div className="w-full max-w-5xl grid md:grid-cols-2 gap-6 md:gap-8">
-          {/* Hero */}
-          <div className="rounded-[28px] bg-white text-black p-8 md:p-10 flex flex-col justify-between overflow-hidden relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-violet-100 via-transparent to-transparent opacity-60 pointer-events-none" />
-            <div className="relative">
-              <div className="inline-flex items-center gap-2 rounded-full border border-black/10 px-3 py-1 text-xs font-medium">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                DTLS 1.2+ • SRTP • PFS • No server recording
-              </div>
-              <h1 className="mt-6 text-[32px] md:text-[42px] font-semibold tracking-tight leading-[0.95]">
-                Private video
-                <br />
-                calls, truly
-                <br />
-                <span className="text-zinc-500">end-to-end.</span>
-              </h1>
-              <p className="mt-4 text-sm leading-6 text-zinc-600 max-w-sm">
-                Minimal 1:1 calling. Media flows directly peer-to-peer via
-                WebRTC. Signaling only for handshake — nothing stored, ephemeral
-                rooms.
-              </p>
-              <ul className="mt-4 space-y-1 text-xs text-zinc-600 list-disc pl-4">
-                <li>CSPRNG room IDs (crypto.getRandomValues, 52-bit+)</li>
-                <li>DTLS+SRTP with ECDHE, perfect forward secrecy</li>
-                <li>Strict CSP/HSTS/COOP headers, no embedding</li>
-              </ul>
-            </div>
-            <div className="relative mt-8 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-black text-white px-3 py-1.5">
-                ✓ P2P WebRTC
-              </span>
-              <span className="rounded-full border border-black/10 px-3 py-1.5">
-                ✓ No sign-up
-              </span>
-              <span className="rounded-full border border-black/10 px-3 py-1.5">
-                ✓ 1:1 only
-              </span>
-            </div>
-          </div>
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-5 pb-10 md:px-10">
+        <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+          {/* Hero (§9) */}
+          <section className="rise-in overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface)] p-8 md:p-10">
+            <StatusPill tone="info" pulse>
+              Private call
+            </StatusPill>
+            <h1 className="mt-5 text-[40px] font-semibold leading-[1.02] tracking-tight md:text-[56px]">
+              Talk face to face.
+              <br />
+              <span className="text-[var(--text-secondary)]">Anywhere.</span>
+            </h1>
+            <p className="mt-4 max-w-sm text-[15px] leading-6 text-[var(--text-secondary)]">
+              Simple, private 1-to-1 video conversations without the clutter.
+            </p>
 
-          {/* Actions */}
-          <div className="flex flex-col gap-6">
-            {/* Create */}
-            <div className="rounded-[28px] border border-white/10 bg-white/[0.04] backdrop-blur p-8">
-              <h2 className="text-lg font-semibold">Create a room</h2>
-              <p className="text-sm text-zinc-400 mt-1">
-                Generate a cryptographically random room ID. Share the link —
-                only one peer can join. Room is ephemeral.
+            {/* Stylized live-call composition */}
+            <div className="relative mt-8 overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--background)]">
+              <div className="flex aspect-[16/9] items-center justify-center gap-3 bg-[radial-gradient(circle_at_30%_30%,rgba(124,92,255,0.22),transparent_55%),radial-gradient(circle_at_75%_75%,rgba(84,168,255,0.14),transparent_50%),#0c0c10]">
+                <Avatar name="A" size={56} state="live" />
+                <div className="text-left">
+                  <p className="text-sm font-semibold text-white">Guest is here</p>
+                  <p className="text-xs text-[var(--text-secondary)]">Preview of your call stage</p>
+                </div>
+              </div>
+              <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[rgba(16,16,20,0.8)] p-2 backdrop-blur-md">
+                <Avatar name="Y" size={36} />
+                <div className="glass flex items-center gap-1.5 rounded-full px-2.5 py-1.5">
+                  <Icons.Mic size={14} />
+                  <Icons.Video size={14} />
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-[var(--danger)]">
+                    <Icons.PhoneOff size={12} />
+                  </span>
+                </div>
+              </div>
+              <div className="absolute left-3 top-3">
+                <StatusPill tone="live" pulse>Live</StatusPill>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-2 text-[11px] text-[var(--text-muted)]">
+              {["No sign-up", "P2P encrypted", "Nothing stored"].map((t) => (
+                <span key={t} className="rounded-full border border-[var(--border-subtle)] px-3 py-1.5">
+                  {t}
+                </span>
+              ))}
+            </div>
+          </section>
+
+          {/* Actions (§10–11) */}
+          <div className="flex flex-col gap-5">
+            <section className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] p-6 md:p-7">
+              <h2 className="text-lg font-semibold">Start a call</h2>
+              <p className="mt-1 text-[13px] leading-5 text-[var(--text-secondary)]">
+                Create a private room and share the invite link. Only one person can join.
               </p>
-              <button
-                onClick={handleCreate}
-                disabled={creating}
-                className="mt-6 w-full h-12 rounded-full bg-white text-black font-medium hover:bg-zinc-200 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {creating ? (
-                  "Generating…"
-                ) : (
-                  <>
-                    <span className="text-lg">＋</span> Create secure room
-                  </>
-                )}
-              </button>
+              <Button onClick={handleCreate} disabled={creating} className="mt-5 w-full">
+                {creating ? "Creating your room…" : "Start a call"}
+              </Button>
               {createError && (
-                <p className="mt-2 text-xs text-red-300 font-medium" role="alert">
+                <p role="alert" className="mt-3 rounded-[12px] border border-[rgba(255,95,109,0.3)] bg-[rgba(255,95,109,0.08)] px-3 py-2 text-xs text-[#ffb3bb]">
                   {createError}
                 </p>
               )}
-              <p className="mt-3 text-xs text-zinc-500 text-center">
-                CSPRNG • Host claims Peer ID first • 52-bit entropy • never reused
-              </p>
-            </div>
+            </section>
 
-            {/* Join */}
-            <div className="rounded-[28px] border border-white/10 bg-white p-6 text-black">
-              <h2 className="text-lg font-semibold">Join a room</h2>
-              <p className="text-sm text-zinc-500 mt-1">
-                Enter the room code shared by your peer.
+            <section className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] p-6 md:p-7">
+              <h2 className="text-lg font-semibold">Join a call</h2>
+              <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
+                Enter the invite code your peer shared.
               </p>
-              <form onSubmit={handleJoin} className="mt-6 flex gap-2" noValidate>
+              <form onSubmit={handleJoin} className="mt-4 flex flex-col gap-3" noValidate>
                 <input
                   value={joinId}
                   onChange={(e) => {
@@ -215,74 +235,69 @@ export default function Home() {
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={!!joinError}
-                  className={`flex-1 h-12 rounded-full border px-5 text-sm font-mono uppercase tracking-wide outline-none placeholder:capitalize ${
-                    joinError
-                      ? "border-red-400 focus:border-red-400"
-                      : "border-black/10 focus:border-black/30"
-                  }`}
+                  aria-label="Invite code"
+                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm uppercase tracking-widest outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
                 />
-                <button
-                  type="submit"
-                  disabled={!joinId.trim()}
-                  className="h-12 px-7 rounded-full bg-black text-white text-sm font-medium hover:bg-zinc-800 transition disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  Join
-                </button>
+                <Button type="submit" variant="secondary" disabled={!joinId.trim()}>
+                  Continue
+                </Button>
               </form>
               {joinError && (
-                <p className="mt-2 text-xs text-red-600 font-medium" role="alert">
+                <p role="alert" className="mt-3 text-xs leading-5 text-[#ffb3bb]">
                   {joinError}
                 </p>
               )}
-              <div className="mt-4 rounded-2xl bg-zinc-50 border border-black/[0.06] p-3 flex items-start gap-2.5">
-                <span className="mt-0.5 h-6 w-6 rounded-full bg-emerald-500 grid place-items-center text-white text-xs shrink-0">
-                  🔒
-                </span>
-                <p className="text-xs leading-4 text-zinc-600">
-                  <span className="font-semibold text-black">
-                    Highly encrypted:
-                  </span>{" "}
-                  WebRTC enforces DTLS + SRTP with ECDHE (PFS). Media is
-                  encrypted end-to-end and never touches our server — only TLS
-                  signaling does (PeerJS cloud WSS).
-                </p>
-              </div>
-            </div>
+            </section>
 
-            <p className="text-xs text-zinc-500 text-center px-4">
-              Tip: use Chrome/Firefox + HTTPS. Camera/mic permission required.
-              One-to-one only — 3rd join blocked; host can permanently delete room.
-            </p>
+            {/* Recents (§48) */}
+            <section>
+              <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                Recent
+              </h2>
+              {recents.length === 0 ? (
+                <EmptyState
+                  title="No recent calls"
+                  body="Start a conversation and your recent calls will appear here."
+                />
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {recents.map((r) => (
+                    <li key={`${r.id}-${r.at}`}>
+                      <button
+                        onClick={() =>
+                          router.push(
+                            `/room/${encodeURIComponent(r.id)}${r.role === "host" ? "?host=true" : ""}`
+                          )
+                        }
+                        className="pressable flex w-full items-center gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-white/[0.03] px-4 py-3 text-left"
+                      >
+                        <Avatar name={r.id} size={36} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-mono text-[13px] font-semibold">{r.id}</span>
+                          <span className="block text-[11px] text-[var(--text-muted)]">
+                            {r.role === "host" ? "Hosted" : "Joined"} ·{" "}
+                            {new Date(r.at).toLocaleDateString()}
+                          </span>
+                        </span>
+                        <Icons.Phone size={16} className="text-[var(--text-muted)]" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           </div>
         </div>
 
-        <div className="mt-10 flex flex-wrap justify-center gap-2 text-xs text-zinc-500 max-w-2xl text-center">
-          <span className="rounded-full border border-white/10 px-3 py-1">
-            No recording
-          </span>
-          <span className="rounded-full border border-white/10 px-3 py-1">
-            No history stored
-          </span>
-          <span className="rounded-full border border-white/10 px-3 py-1">
-            STUN: Google public
-          </span>
-          <span className="rounded-full border border-white/10 px-3 py-1">
-            CSP + HSTS + COOP
-          </span>
-          <span className="rounded-full border border-white/10 px-3 py-1">
-            Works on Vercel / localhost:3000
-          </span>
-        </div>
+        {/* Trust strip (§38) */}
+        <p className="mx-auto flex items-center gap-2 text-center text-xs text-[var(--text-muted)]">
+          <Icons.Lock size={13} />
+          Your connection is secure — media flows directly between you two and is never stored.
+        </p>
       </main>
 
-      <footer className="px-6 py-6 border-t border-white/10 text-center text-xs text-zinc-500">
-        <div>
-          Built with Next.js 16 + PeerJS + WebRTC • Encrypted P2P • Minimal by
-          design
-        </div>
-        <div className="mt-1.5 font-medium text-zinc-300">
-          Designed and Developed by Yash Shekhar
-        </div>
+      <footer className="border-t border-[var(--border-subtle)] px-6 py-5 text-center text-xs text-[var(--text-muted)]">
+        Built with Next.js + PeerJS + WebRTC · <span className="text-[var(--text-secondary)]">Designed and Developed by Yash Shekhar</span>
       </footer>
     </div>
   );
