@@ -379,10 +379,14 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     []
   );
 
-  // Browsers may block remote audio until a user gesture — retry on click/key.
-  // Only the hidden <audio> element gates the flag; <video> is muted by
-  // design (see attachRemoteStream) so its play() result is irrelevant.
+  // Fires when the OS/browser blocks audio before a gesture, or when a late
+  // audio track lands. Rebuilds everything from the LATEST tracks, plays the
+  // audio element, and verifies it is really playing — the prompt only clears
+  // on verified playback, otherwise it stays with a concrete reason.
   const unlockRemoteAudio = useCallback(async () => {
+    const rs = remoteStreamState;
+    // Rebuild split streams from latest tracks (late audio lands here).
+    if (rs) attachRemoteStream(rs);
     const v = remoteVideoRef.current;
     if (v) {
       try {
@@ -392,33 +396,95 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }
     const a = remoteAudioRef.current;
     if (!a) return;
+    const audioTracks = rs?.getAudioTracks() ?? [];
+    if (!rs || audioTracks.length === 0) {
+      // Nothing to play yet — keep the prompt, explain why.
+      pushToast(setToasts, "No voice received yet — peer's mic may be blocked");
+      return;
+    }
     try {
       a.muted = false;
       a.volume = 1;
       await a.play();
-      setAudioBlocked(false);
-      setMeterTick((n) => n + 1);
+      if (!a.paused) {
+        setAudioBlocked(false);
+        setMeterTick((n) => n + 1);
+      } else {
+        // play() resolved but element didn't start — one delayed retry.
+        setTimeout(() => {
+          a.play()
+            ?.then(() => {
+              if (!a.paused) {
+                setAudioBlocked(false);
+                setMeterTick((n) => n + 1);
+              }
+            })
+            .catch(() => setAudioBlocked(true));
+        }, 300);
+      }
     } catch {
       // still blocked — keep the "Tap to enable" prompt
+      setAudioBlocked(true);
     }
-  }, []);
+  }, [attachRemoteStream, remoteStreamState]);
 
   // Single entry point for an incoming remote stream: render it, snapshot
-  // it for meters/diagnostics, and fail loudly if the peer sent no audio
-  // (the classic "I see them but can't hear them" one-way case).
+  // it for meters/diagnostics, and watch for LATE audio tracks — WebRTC
+  // often delivers video first and audio on a later m-line via onaddtrack.
+  // A one-time snapshot is what caused "video connects, voice never comes".
   const handleRemoteStream = useCallback(
     (remoteStream: MediaStream) => {
       attachRemoteStream(remoteStream);
       setRemoteStreamState(remoteStream);
       setHasRemote(true);
-      setAudioBlocked(false);
       setStatus("connected");
-      if (!remoteStream.getAudioTracks().length) {
-        setError("Connected, but the other person sent no audio — ask them to check their mic and press Reconnect camera & mic.");
-      }
+      // Late tracks: re-attach so the voice channel picks them up, then
+      // attempt playback (failure re-arms the enable-audio prompt).
+      try {
+        remoteStream.onaddtrack = () => {
+          attachRemoteStream(remoteStream);
+          // fresh object identity so meters/diagnostics re-run on new tracks
+          try {
+            setRemoteStreamState(new MediaStream(remoteStream.getTracks()));
+          } catch {
+            setRemoteStreamState(remoteStream);
+          }
+          const a = remoteAudioRef.current;
+          if (a && remoteStream.getAudioTracks().length > 0) {
+            const p = a.play();
+            if (p && typeof p.catch === "function") {
+              p.then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
+            } else {
+              setAudioBlocked(false);
+            }
+          }
+          setError((prev) =>
+            prev && prev.includes("no voice arrived yet") ? null : prev
+          );
+        };
+        remoteStream.onremovetrack = () => {
+          attachRemoteStream(remoteStream);
+        };
+      } catch {}
     },
     [attachRemoteStream]
   );
+
+  // Audio often trails video by a few seconds — only warn if the CURRENT
+  // remote stream still carries no audio after a grace period. Effect-local
+  // timer, so stream swaps and unmount cancel it automatically.
+  useEffect(() => {
+    if (!remoteStreamState || remoteStreamState.getAudioTracks().length > 0) return;
+    const t = setTimeout(() => {
+      if (!remoteStreamState.getAudioTracks().length) {
+        setAudioBlocked(true);
+        setError(
+          "Connected, but no voice arrived yet — ask them to check their mic and press More → Reconnect camera & mic."
+        );
+      }
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [remoteStreamState]);
 
   useEffect(() => {
     if (!audioBlocked) return;
