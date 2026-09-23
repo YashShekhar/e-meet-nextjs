@@ -9,6 +9,7 @@ import {
   Button,
   IconButton,
   Icons,
+  LevelDots,
   StatusPill,
   ToastStack,
   VideoPlaceholder,
@@ -63,6 +64,59 @@ function buzz(pattern: number | number[] = 10) {
   } catch {}
 }
 
+/* Live mic/peer voice level (0..1) via WebAudio analyser.
+   Returns 0 when the stream has no audio track or metering fails. */
+function useAudioLevel(stream: MediaStream | null, resumeToken: number): number {
+  const [level, setLevel] = useState(0);
+  useEffect(() => {
+    if (!stream || !stream.getAudioTracks().length) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- stream swap is external
+      setLevel(0);
+      return;
+    }
+    let cancelled = false;
+    let raf = 0;
+    let ctx: AudioContext | null = null;
+    let src: MediaStreamAudioSourceNode | null = null;
+    try {
+      const AC =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AC) return;
+      ctx = new AC();
+      if (ctx.state === "suspended") void ctx.resume().catch(() => {});
+      src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        if (cancelled) return;
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        setLevel(Math.min(1, Math.sqrt(sum / data.length) * 3));
+        raf = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      setLevel(0);
+    }
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      try { src?.disconnect(); } catch {}
+      try { void ctx?.close().catch(() => {}); } catch {}
+    };
+    // resumeToken re-creates the context after a user gesture so a context
+    // born "suspended" (autoplay policy) starts metering for real.
+  }, [stream, resumeToken]);
+  return level;
+}
+
 type Status =
   | "initializing"
   | "waiting"
@@ -95,6 +149,24 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [controlsHidden, setControlsHidden] = useState(false);
   const [micPulse, setMicPulse] = useState(0);
+  // Object-identity snapshots so meters/diagnostics re-run on swap.
+  const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
+  const [remoteStreamState, setRemoteStreamState] = useState<MediaStream | null>(null);
+  const [meterTick, setMeterTick] = useState(0);
+  const localLevel = useAudioLevel(micOn ? localStreamState : null, meterTick);
+  const remoteLevel = useAudioLevel(remoteStreamState, meterTick);
+  // First user gesture re-arms meters (suspended AudioContext → running).
+  useEffect(() => {
+    const kick = () => setMeterTick((n) => n + 1);
+    window.addEventListener("click", kick, { once: true });
+    window.addEventListener("touchend", kick, { once: true });
+    window.addEventListener("keydown", kick, { once: true });
+    return () => {
+      window.removeEventListener("click", kick);
+      window.removeEventListener("touchend", kick);
+      window.removeEventListener("keydown", kick);
+    };
+  }, []);
   const prevStatusRef = useRef<Status>("initializing");
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -166,6 +238,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     } catch {}
     setHasRemote(false);
     setAudioBlocked(false);
+    setLocalStreamState(null);
+    setRemoteStreamState(null);
   }, []);
 
   // Ensure cleanup on unmount + beforeunload (ephemeral)
@@ -317,10 +391,28 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       a.volume = 1;
       await a.play();
       setAudioBlocked(false);
+      setMeterTick((n) => n + 1);
     } catch {
       // still blocked — keep the "Tap to enable" prompt
     }
   }, []);
+
+  // Single entry point for an incoming remote stream: render it, snapshot
+  // it for meters/diagnostics, and fail loudly if the peer sent no audio
+  // (the classic "I see them but can't hear them" one-way case).
+  const handleRemoteStream = useCallback(
+    (remoteStream: MediaStream) => {
+      attachRemoteStream(remoteStream);
+      setRemoteStreamState(remoteStream);
+      setHasRemote(true);
+      setAudioBlocked(false);
+      setStatus("connected");
+      if (!remoteStream.getAudioTracks().length) {
+        setError("Connected, but the other person sent no audio — ask them to check their mic and press Reconnect camera & mic.");
+      }
+    },
+    [attachRemoteStream]
+  );
 
   useEffect(() => {
     if (!audioBlocked) return;
@@ -466,6 +558,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       });
       const oldStream = localStreamRef.current;
       localStreamRef.current = newStream;
+      setLocalStreamState(newStream);
       if (localVideoRef.current) attachStream(localVideoRef.current, newStream);
       setMicOn(wasMicOn);
       setCamOn(wasCamOn);
@@ -516,14 +609,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         if (call) {
           callRef.current = call;
           call.on("stream", (rs) => {
-            attachRemoteStream(rs);
-            setHasRemote(true);
-            setAudioBlocked(false);
-            setStatus("connected");
+            handleRemoteStream(rs);
           });
           call.on("close", () => {
             setStatus("ended");
             setHasRemote(false);
+            setRemoteStreamState(null);
             try {
               if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
               if (remoteAudioRef.current) {
@@ -552,7 +643,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       if (err.name === "NotAllowedError") setError("Camera/mic permission denied. Allow and try Re-init.");
       else setError(err.message || "Failed to re-init media.");
     }
-  }, [attachRemoteStream, attachStream, isHost, roomId, micOn, camOn]);
+  }, [handleRemoteStream, attachStream, isHost, roomId, micOn, camOn]);
 
   // Core WebRTC setup
   useEffect(() => {
@@ -593,6 +684,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           return;
         }
         localStreamRef.current = stream;
+        if (!cancelled) setLocalStreamState(stream);
         // attach now or on next tick
         if (localVideoRef.current) attachStream(localVideoRef.current, stream);
         else setTimeout(() => localVideoRef.current && attachStream(localVideoRef.current, stream), 50);
@@ -743,15 +835,13 @@ export default function RoomClient({ roomId }: { roomId: string }) {
               };
               call.on("stream", (remoteStream) => {
                 if (cancelled) return;
-                attachRemoteStream(remoteStream);
-                setHasRemote(true);
-                setAudioBlocked(false);
-                setStatus("connected");
+                handleRemoteStream(remoteStream);
               });
               call.on("close", () => {
                 if (cancelled) return;
                 setStatus("ended");
                 setHasRemote(false);
+                setRemoteStreamState(null);
                 try {
                   if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
                   if (remoteAudioRef.current) {
@@ -788,10 +878,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           call.answer(localStreamRef.current ?? stream);
           call.on("stream", (remoteStream) => {
             if (cancelled) return;
-            attachRemoteStream(remoteStream);
-            setHasRemote(true);
-            setAudioBlocked(false);
-            setStatus("connected");
+            handleRemoteStream(remoteStream);
           });
           call.on("close", () => {
             if (cancelled) return;
@@ -799,6 +886,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             // Polling will keep it as deleted/full; show ended
             setStatus("ended");
             setHasRemote(false);
+            setRemoteStreamState(null);
             try {
               if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
               if (remoteAudioRef.current) {
@@ -900,7 +988,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       });
       localStreamRef.current = null;
     };
-  }, [roomId, isHost, attachStream, attachRemoteStream]);
+  }, [roomId, isHost, attachStream, attachRemoteStream, handleRemoteStream]);
 
   const statusMeta: Record<Status, { label: string; tone: "neutral" | "live" | "warn" | "danger" | "info" }> = {
     initializing: { label: "Preparing…", tone: "neutral" },
@@ -952,6 +1040,26 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   const friendly = error ? friendlyError(error) : null;
   const inCall = status === "connected" || (status === "connecting" && hasRemote);
+  // Connection snapshot for diagnostics — polled while the sheet is open
+  // (refs can't be read during render).
+  const [connState, setConnState] = useState<string | null>(null);
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const read = () => {
+      const p =
+        (callRef.current as unknown as { peerConnection?: RTCPeerConnection } | null)
+          ?.peerConnection ?? null;
+      setConnState(p ? `${p.connectionState} · ice ${p.iceConnectionState}` : "no peer connection");
+    };
+    read();
+    const t = setInterval(read, 1000);
+    return () => clearInterval(t);
+  }, [sheetOpen]);
+  const localAudioTracks = localStreamState?.getAudioTracks() ?? [];
+  const remoteAudioTracks = remoteStreamState?.getAudioTracks() ?? [];
+  const speaking = remoteLevel > 0.08;
+  const peerSilent =
+    hasRemote && status === "connected" && remoteAudioTracks.length > 0 && !speaking;
 
   return (
     <div className="flex min-h-dvh flex-1 flex-col">
@@ -1116,12 +1224,23 @@ export default function RoomClient({ roomId }: { roomId: string }) {
               {/* Hidden voice channel — the ONLY audible remote path. */}
               <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-              {/* Top-left presence */}
+              {/* Top-left presence + live peer voice meter */}
               <div className="absolute left-3 top-3 flex items-center gap-2">
                 <span className="glass rounded-full px-3 py-1.5 text-[11px] font-medium text-white">
                   {hasRemote ? (isHost ? "Guest" : "Host") : "No one here yet"}
                 </span>
                 {hasRemote && <StatusPill tone="live" pulse>Live</StatusPill>}
+                {hasRemote && (
+                  <span
+                    className="glass flex items-center gap-2 rounded-full px-3 py-1.5"
+                    title={speaking ? "Peer voice detected" : "No peer voice right now"}
+                  >
+                    <LevelDots level={remoteLevel} label={speaking ? "Peer speaking" : "Peer silent"} />
+                    <span className="text-[10px] font-medium text-[var(--text-secondary)]">
+                      {speaking ? "speaking" : "quiet"}
+                    </span>
+                  </span>
+                )}
               </div>
               {/* Mic/cam flags */}
               <div className="absolute right-3 top-3 flex gap-1.5">
@@ -1145,6 +1264,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                   Tap to enable audio
                 </button>
               )}
+              {peerSilent && !audioBlocked && (
+                <p className="glass absolute bottom-3 left-3 z-10 max-w-[220px] rounded-[12px] px-3 py-2 text-[11px] leading-4 text-[var(--text-secondary)]">
+                  No voice from peer right now — they may be muted, or their mic hears nothing. Check <b>More → Audio health</b>.
+                </p>
+              )}
 
               {/* Floating self-preview (§13) */}
               <div className="absolute bottom-3 right-3 w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36 md:w-48">
@@ -1162,8 +1286,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     </div>
                   )}
                 </div>
-                <p className="bg-[rgba(10,10,12,0.85)] px-2 py-1 text-center text-[10px] text-[var(--text-secondary)]">
+                <p className="flex items-center justify-center gap-1.5 bg-[rgba(10,10,12,0.85)] px-2 py-1 text-center text-[10px] text-[var(--text-secondary)]">
                   You{!micOn ? " · muted" : ""}
+                  {micOn && <LevelDots level={localLevel} label="Your mic level — speak to see it move" />}
                 </p>
               </div>
             </div>
@@ -1251,6 +1376,37 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           >
             <Icons.PhoneOff size={18} /> Leave call
           </button>
+          <div className="rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3">
+            <p className="text-xs font-semibold text-white">Audio health</p>
+            <dl className="mt-2 space-y-1.5 font-mono text-[11px] leading-4 text-[var(--text-secondary)]">
+              <div className="flex items-center justify-between gap-2">
+                <dt>Your mic</dt>
+                <dd className="flex items-center gap-2">
+                  <LevelDots level={micOn ? localLevel : 0} label="Your mic level" />
+                  {localAudioTracks.length === 0
+                    ? "no track"
+                    : `${localAudioTracks.length} track${localAudioTracks.length > 1 ? "s" : ""} · ${localAudioTracks[0].enabled ? "on" : "off"} · ${localAudioTracks[0].readyState}`}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt>Peer voice</dt>
+                <dd className="flex items-center gap-2">
+                  <LevelDots level={remoteLevel} label="Peer voice level" />
+                  {remoteAudioTracks.length === 0
+                    ? "no track received"
+                    : `${remoteAudioTracks.length} track${remoteAudioTracks.length > 1 ? "s" : ""} · ${remoteAudioTracks[0].muted ? "muted (no data)" : "flowing"} · ${remoteAudioTracks[0].readyState}`}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt>Connection</dt>
+                <dd>{connState ?? "—"}</dd>
+              </div>
+            </dl>
+            <p className="mt-2 text-[11px] leading-4 text-[var(--text-muted)]">
+              Speak and watch the dots: if yours don&apos;t move, your mic is blocked. If yours move but
+              the peer&apos;s don&apos;t, their voice isn&apos;t reaching you.
+            </p>
+          </div>
           <p className="px-1 pt-1 text-[11px] leading-4 text-[var(--text-muted)]">
             {isHost ? "Host" : "Guest"} · {roomId} · 1:1 ephemeral · P2P encrypted
           </p>

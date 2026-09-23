@@ -363,6 +363,25 @@ export function VideoPlaceholder({
   );
 }
 
+/* ——— Audio level dots — live voice meter (§26) ——— */
+export function LevelDots({ level, label }: { level: number; label: string }) {
+  const lit = Math.round(level * 5);
+  return (
+    <span className="inline-flex items-center gap-[3px]" role="img" aria-label={label}>
+      {[0, 1, 2, 3, 4].map((i) => (
+        <span
+          key={i}
+          className="w-[3px] rounded-full transition-all"
+          style={{
+            height: 6 + i * 3,
+            background: i < lit ? "var(--success)" : "rgba(255,255,255,0.18)",
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
 /* ——— Empty state (§48) ——— */
 export function EmptyState({
   title,
