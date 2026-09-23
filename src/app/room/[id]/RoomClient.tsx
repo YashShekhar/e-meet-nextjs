@@ -180,7 +180,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   // Dedicated audio element guarantees the remote audio track plays even if
   // the remote <video> autoplay (with audio) is blocked or video is disabled.
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
-  const [audioBlocked, setAudioBlocked] = useState(false);
+  // Pre-join choice: the join tap is the user gesture that unlocks remote
+  // audio autoplay, so no "tap to enable" prompt is needed afterwards.
+  const [entered, setEntered] = useState(false);
+  const [joinMuted, setJoinMuted] = useState(false);
+  const [joinCamOff, setJoinCamOff] = useState(false);
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const callRef = useRef<MediaConnection | null>(null);
@@ -243,7 +247,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       }
     } catch {}
     setHasRemote(false);
-    setAudioBlocked(false);
     setLocalStreamState(null);
     setRemoteStreamState(null);
   }, []);
@@ -334,12 +337,23 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       el.muted = !opts.audible;
       el.volume = 1;
     } catch {}
-    const p = el.play();
-    if (p && typeof p.catch === "function") {
-      p.catch(() => {
-        if (opts.audible) setAudioBlocked(true);
-      });
-    }
+    const attempt = () => {
+      try {
+        const p = el.play();
+        if (p && typeof p.catch === "function") {
+          p.catch(() => {
+            // Autoplay can still be gated pre-gesture — one silent retry on
+            // the next interaction. The join tap normally unlocks it already.
+            if (!opts.audible) return;
+            const retry = () => attempt();
+            window.addEventListener("click", retry, { once: true });
+            window.addEventListener("touchend", retry, { once: true });
+            window.addEventListener("keydown", retry, { once: true });
+          });
+        }
+      } catch {}
+    };
+    attempt();
     return true;
   }, []);
 
@@ -379,55 +393,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     []
   );
 
-  // Fires when the OS/browser blocks audio before a gesture, or when a late
-  // audio track lands. Rebuilds everything from the LATEST tracks, plays the
-  // audio element, and verifies it is really playing — the prompt only clears
-  // on verified playback, otherwise it stays with a concrete reason.
-  const unlockRemoteAudio = useCallback(async () => {
-    const rs = remoteStreamState;
-    // Rebuild split streams from latest tracks (late audio lands here).
-    if (rs) attachRemoteStream(rs);
-    const v = remoteVideoRef.current;
-    if (v) {
-      try {
-        v.muted = true;
-        await v.play();
-      } catch {}
-    }
-    const a = remoteAudioRef.current;
-    if (!a) return;
-    const audioTracks = rs?.getAudioTracks() ?? [];
-    if (!rs || audioTracks.length === 0) {
-      // Nothing to play yet — keep the prompt, explain why.
-      pushToast(setToasts, "No voice received yet — peer's mic may be blocked");
-      return;
-    }
-    try {
-      a.muted = false;
-      a.volume = 1;
-      await a.play();
-      if (!a.paused) {
-        setAudioBlocked(false);
-        setMeterTick((n) => n + 1);
-      } else {
-        // play() resolved but element didn't start — one delayed retry.
-        setTimeout(() => {
-          a.play()
-            ?.then(() => {
-              if (!a.paused) {
-                setAudioBlocked(false);
-                setMeterTick((n) => n + 1);
-              }
-            })
-            .catch(() => setAudioBlocked(true));
-        }, 300);
-      }
-    } catch {
-      // still blocked — keep the "Tap to enable" prompt
-      setAudioBlocked(true);
-    }
-  }, [attachRemoteStream, remoteStreamState]);
-
   // Single entry point for an incoming remote stream: render it, snapshot
   // it for meters/diagnostics, and watch for LATE audio tracks — WebRTC
   // often delivers video first and audio on a later m-line via onaddtrack.
@@ -438,8 +403,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       setRemoteStreamState(remoteStream);
       setHasRemote(true);
       setStatus("connected");
-      // Late tracks: re-attach so the voice channel picks them up, then
-      // attempt playback (failure re-arms the enable-audio prompt).
+      // Late tracks: re-attach so the voice channel picks them up.
       try {
         remoteStream.onaddtrack = () => {
           attachRemoteStream(remoteStream);
@@ -448,15 +412,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             setRemoteStreamState(new MediaStream(remoteStream.getTracks()));
           } catch {
             setRemoteStreamState(remoteStream);
-          }
-          const a = remoteAudioRef.current;
-          if (a && remoteStream.getAudioTracks().length > 0) {
-            const p = a.play();
-            if (p && typeof p.catch === "function") {
-              p.then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
-            } else {
-              setAudioBlocked(false);
-            }
           }
           setError((prev) =>
             prev && prev.includes("no voice arrived yet") ? null : prev
@@ -477,7 +432,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (!remoteStreamState || remoteStreamState.getAudioTracks().length > 0) return;
     const t = setTimeout(() => {
       if (!remoteStreamState.getAudioTracks().length) {
-        setAudioBlocked(true);
         setError(
           "Connected, but no voice arrived yet — ask them to check their mic and press More → Reconnect camera & mic."
         );
@@ -485,21 +439,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }, 4000);
     return () => clearTimeout(t);
   }, [remoteStreamState]);
-
-  useEffect(() => {
-    if (!audioBlocked) return;
-    const onGesture = () => {
-      unlockRemoteAudio();
-    };
-    window.addEventListener("click", onGesture);
-    window.addEventListener("touchend", onGesture);
-    window.addEventListener("keydown", onGesture);
-    return () => {
-      window.removeEventListener("click", onGesture);
-      window.removeEventListener("touchend", onGesture);
-      window.removeEventListener("keydown", onGesture);
-    };
-  }, [audioBlocked, unlockRemoteAudio]);
 
   // Keep local preview attached when ref mounts or stream changes
   useEffect(() => {
@@ -719,8 +658,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     }
   }, [handleRemoteStream, attachStream, isHost, roomId, micOn, camOn]);
 
-  // Core WebRTC setup
+  // Core WebRTC setup — runs only after the pre-join choice (the join tap
+  // is the user gesture that unlocks remote-audio autoplay).
   useEffect(() => {
+    if (!entered) return;
     // Validate roomId before any network
     if (!ROOM_ID_REGEX.test(roomId)) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- validation on mount, avoids network if ID is malformed
@@ -759,11 +700,18 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         }
         localStreamRef.current = stream;
         if (!cancelled) setLocalStreamState(stream);
+        // Honor the pre-join choice: start muted / camera-off when asked.
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = !joinMuted;
+        });
+        stream.getVideoTracks().forEach((t) => {
+          t.enabled = !joinCamOff;
+        });
         // attach now or on next tick
         if (localVideoRef.current) attachStream(localVideoRef.current, stream);
         else setTimeout(() => localVideoRef.current && attachStream(localVideoRef.current, stream), 50);
-        setMicOn(stream.getAudioTracks().some((t) => t.enabled));
-        setCamOn(stream.getVideoTracks().some((t) => t.enabled));
+        setMicOn(!joinMuted);
+        setCamOn(!joinCamOff);
 
         // Enforce room lifecycle via API (never reusable after delete, 1:1 limit)
         try {
@@ -1062,7 +1010,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       });
       localStreamRef.current = null;
     };
-  }, [roomId, isHost, attachStream, attachRemoteStream, handleRemoteStream]);
+  }, [roomId, isHost, entered, joinMuted, joinCamOff, attachStream, attachRemoteStream, handleRemoteStream]);
 
   const statusMeta: Record<Status, { label: string; tone: "neutral" | "live" | "warn" | "danger" | "info" }> = {
     initializing: { label: "Preparing…", tone: "neutral" },
@@ -1259,7 +1207,83 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             : "flex min-h-0 flex-1 flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] md:px-6"
         }
       >
-        {status === "ended" && !roomDeleted ? (
+        {!entered ? (
+          /* Pre-join choice — join tap unlocks remote-audio autoplay, and the
+             joiner decides upfront whether to be heard (no mid-call prompts) */
+          <div className="rise-in mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 overflow-y-auto py-6">
+            <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] p-6 text-center md:p-7">
+              <Avatar name={roomId} size={64} />
+              <h2 className="mt-4 text-xl font-semibold">Join this call?</h2>
+              <p className="mt-1 font-mono text-[13px] tracking-widest text-[var(--text-secondary)]">{roomId}</p>
+              <p className="mx-auto mt-2 max-w-[34ch] text-[13px] leading-5 text-[var(--text-secondary)]">
+                {isHost
+                  ? "You'll wait as host until your guest joins."
+                  : "You'll join with your camera and mic as chosen below."}
+              </p>
+              {roomDeleted || (error && status === "error") ? (
+                <div className="mt-4 rounded-[14px] border border-[rgba(255,95,109,0.3)] bg-[rgba(255,95,109,0.08)] px-4 py-3">
+                  <p className="text-sm font-semibold text-white">{friendly?.title ?? "Can't join"}</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{friendly?.body}</p>
+                  <Button variant="secondary" onClick={() => router.push("/")} className="mt-3 w-full">
+                    Go home
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <p className="mt-5 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    Microphone
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Join with microphone on or muted">
+                    <button
+                      onClick={() => setJoinMuted(false)}
+                      aria-pressed={!joinMuted}
+                      className={`pressable flex flex-col items-center gap-2 rounded-[16px] border px-4 py-4 text-sm font-medium ${
+                        !joinMuted
+                          ? "border-white bg-white text-black"
+                          : "border-[var(--border-subtle)] bg-[var(--background)] text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      <Icons.Mic size={20} /> Mic on
+                    </button>
+                    <button
+                      onClick={() => setJoinMuted(true)}
+                      aria-pressed={joinMuted}
+                      className={`pressable flex flex-col items-center gap-2 rounded-[16px] border px-4 py-4 text-sm font-medium ${
+                        joinMuted
+                          ? "border-[var(--danger)] bg-[var(--danger)] text-white"
+                          : "border-[var(--border-subtle)] bg-[var(--background)] text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      <Icons.MicOff size={20} /> Muted
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setJoinCamOff((v) => !v)}
+                    aria-pressed={joinCamOff}
+                    className="pressable mt-2 flex w-full items-center gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3.5 text-left text-sm"
+                  >
+                    {joinCamOff ? <Icons.VideoOff size={18} /> : <Icons.Video size={18} />}
+                    {joinCamOff ? "Camera off — join with avatar" : "Camera on"}
+                    <span className="ml-auto text-[11px] text-[var(--text-muted)]">tap to toggle</span>
+                  </button>
+                  <Button
+                    onClick={() => {
+                      buzz(12);
+                      playSound("join");
+                      setEntered(true);
+                    }}
+                    className="mt-4 w-full"
+                  >
+                    {isHost ? "Start & wait for guest" : "Join call"}
+                  </Button>
+                  <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+                    <Icons.Lock size={11} /> Private · nothing is recorded or stored
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : status === "ended" && !roomDeleted ? (
           <div className="rise-in mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
             <Avatar name={roomId} size={80} />
             <h2 className="mt-2 text-2xl font-semibold">Call ended</h2>
@@ -1420,16 +1444,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
               </div>
             </div>
 
-            {/* Prompts live outside the chrome so they surface even when hidden */}
-            {audioBlocked && hasRemote && (
-              <button
-                onClick={unlockRemoteAudio}
-                className="pressable absolute bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-full bg-[var(--warn)] px-4 py-2.5 text-xs font-semibold text-black"
-              >
-                Tap to enable audio
-              </button>
-            )}
-            {peerSilent && !audioBlocked && (
+            {/* Peer-silence hint lives outside the chrome so it surfaces even when hidden */}
+            {peerSilent && (
               <p className="glass absolute bottom-28 left-3 z-20 max-w-[220px] rounded-[12px] px-3 py-2 text-[11px] leading-4 text-[var(--text-secondary)]">
                 No voice from peer right now — they may be muted, or their mic hears nothing. Check <b>More → Audio health</b>.
               </p>
