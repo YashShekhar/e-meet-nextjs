@@ -16,7 +16,9 @@ export const metadata: Metadata = {
   title: "E-Meet — Private 1:1 Video",
   description:
     "Simple, private 1-to-1 video conversations without the clutter. End-to-end encrypted, peer-to-peer, ephemeral.",
-  themeColor: "#0a0a0b",
+  icons: {
+    icon: "/icon.svg",
+  },
 };
 
 export const viewport = {
@@ -32,8 +34,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="flex min-h-dvh flex-col text-[var(--text-primary)]">
-        <div className="flex min-h-dvh flex-col">{children}</div>
+      <body className="min-h-dvh overflow-x-hidden bg-[var(--background)] text-[var(--text-primary)]">
+        <div className="app-shell flex min-h-dvh flex-col">{children}</div>
       </body>
     </html>
   );

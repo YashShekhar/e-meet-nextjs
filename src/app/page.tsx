@@ -135,49 +135,56 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-1 flex-col">
-      {/* Minimal top nav (§31) */}
-      <header className="flex items-center justify-between px-5 py-5 md:px-10">
+    <div className="app-shell flex flex-1 flex-col overflow-hidden">
+      <header className="flex items-center justify-between px-4 py-4 md:px-8">
         <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--action)] text-sm font-bold text-[var(--action-ink)]">
+          <div className="grid h-10 w-10 place-items-center rounded-xl border border-[rgba(255,255,255,0.12)] bg-[var(--action)] text-sm font-bold text-[var(--action-ink)] shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
             E²
           </div>
           <div>
-            <p className="text-[15px] font-semibold leading-none">E-Meet</p>
-            <p className="mt-1 flex items-center gap-1 text-[11px] text-[var(--text-muted)]">
-              <Icons.Lock size={11} /> Private 1:1 calls
+            <p className="text-[15px] font-semibold leading-none tracking-[-0.04em]">E-Meet</p>
+            <p className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
+              <Icons.Lock size={10} /> Private
             </p>
           </div>
         </div>
         <StatusPill tone="live">Encrypted</StatusPill>
       </header>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-5 pb-10 md:px-10">
-        <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-          {/* Hero (§9) */}
-          <section className="rise-in overflow-hidden rounded-[28px] border border-[var(--border-subtle)] bg-[var(--surface)] p-8 md:p-10">
-            <StatusPill tone="info" pulse>
-              Private call
-            </StatusPill>
-            <h1 className="mt-5 text-[40px] font-semibold leading-[1.02] tracking-tight md:text-[56px]">
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center gap-5 px-4 pb-4 md:px-8">
+        <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+          <section className="panel rise-in overflow-hidden rounded-[28px] p-5 md:p-8">
+            <div className="flex items-center justify-between gap-3">
+              <StatusPill tone="info" pulse>Private call</StatusPill>
+              <span className="futuristic-chip inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em]">
+                <span className="signal-bar is-live" aria-hidden="true">
+                  <span /> <span /> <span /> <span />
+                </span>
+                P2P
+              </span>
+            </div>
+
+            <h1 className="mt-5 text-[38px] font-semibold leading-[0.96] tracking-[-0.06em] md:text-[54px]">
               Talk face to face.
               <br />
               <span className="text-[var(--text-secondary)]">Anywhere.</span>
             </h1>
-            <p className="mt-4 max-w-sm text-[15px] leading-6 text-[var(--text-secondary)]">
+            <p className="mt-4 max-w-md text-[15px] leading-6 text-[var(--text-secondary)]">
               Simple, private 1-to-1 video conversations without the clutter.
             </p>
 
-            {/* Quiet preview of the call stage — flat, one idea */}
-            <div className="relative mt-8 overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--background)]">
-              <div className="flex aspect-[16/9] items-center justify-center gap-3">
-                <Avatar name="A" size={56} state="live" />
-                <div className="text-left">
+            <div className="relative mt-7 overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[var(--background)] p-4">
+              <div className="flex aspect-[16/9] items-center justify-center gap-4 rounded-[18px] border border-[var(--border-subtle)] bg-[rgba(255,255,255,0.01)] px-5">
+                <Avatar name="A" size={58} state="live" />
+                <div className="min-w-0 text-left">
                   <p className="text-sm font-semibold text-white">Your room</p>
-                  <p className="text-xs text-[var(--text-secondary)]">Video fills the screen. Controls appear when you move.</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                    Video fills the screen. Controls stay quiet until you need them.
+                  </p>
                 </div>
               </div>
-              <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[rgba(16,16,20,0.8)] p-2 backdrop-blur-md">
+
+              <div className="absolute bottom-4 right-4 flex items-center gap-2 rounded-[18px] border border-[var(--border-subtle)] bg-[rgba(16,16,20,0.8)] p-2 backdrop-blur-md">
                 <Avatar name="Y" size={36} />
                 <div className="glass flex items-center gap-1.5 rounded-full px-2.5 py-1.5">
                   <Icons.Mic size={14} />
@@ -187,24 +194,24 @@ export default function Home() {
                   </span>
                 </div>
               </div>
-              <div className="absolute left-3 top-3">
+
+              <div className="absolute left-4 top-4">
                 <StatusPill tone="live" pulse>Private</StatusPill>
               </div>
             </div>
 
             <div className="mt-6 flex flex-wrap gap-2 text-[11px] text-[var(--text-muted)]">
-              {["No sign-up", "P2P encrypted", "Nothing stored"].map((t) => (
-                <span key={t} className="rounded-full border border-[var(--border-subtle)] px-3 py-1.5">
-                  {t}
+              {['No sign-up', 'P2P encrypted', 'Nothing stored'].map((item) => (
+                <span key={item} className="futuristic-chip rounded-full px-3 py-1.5">
+                  {item}
                 </span>
               ))}
             </div>
           </section>
 
-          {/* Actions (§10–11) */}
           <div className="flex flex-col gap-5">
-            <section className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] p-6 md:p-7">
-              <h2 className="text-lg font-semibold">Start a call</h2>
+            <section className="panel rounded-[24px] p-5 md:p-6">
+              <h2 className="text-lg font-semibold tracking-[-0.04em]">Start a call</h2>
               <p className="mt-1 text-[13px] leading-5 text-[var(--text-secondary)]">
                 Create a private room and share the invite link. Only one person can join.
               </p>
@@ -218,8 +225,8 @@ export default function Home() {
               )}
             </section>
 
-            <section className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] p-6 md:p-7">
-              <h2 className="text-lg font-semibold">Join a call</h2>
+            <section className="panel rounded-[24px] p-5 md:p-6">
+              <h2 className="text-lg font-semibold tracking-[-0.04em]">Join a call</h2>
               <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
                 Enter the invite code your peer shared.
               </p>
@@ -236,7 +243,7 @@ export default function Home() {
                   spellCheck={false}
                   aria-invalid={!!joinError}
                   aria-label="Invite code"
-                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm uppercase tracking-widest outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-white/40"
+                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm uppercase tracking-[0.2em] outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-white/40"
                 />
                 <Button type="submit" variant="secondary" disabled={!joinId.trim()}>
                   Continue
@@ -249,9 +256,8 @@ export default function Home() {
               )}
             </section>
 
-            {/* Recents (§48) */}
-            <section>
-              <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <section className="panel-soft rounded-[22px] p-4">
+              <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                 Recent
               </h2>
               {recents.length === 0 ? (
@@ -269,14 +275,13 @@ export default function Home() {
                             `/room/${encodeURIComponent(r.id)}${r.role === "host" ? "?host=true" : ""}`
                           )
                         }
-                        className="pressable flex w-full items-center gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-white/[0.03] px-4 py-3 text-left"
+                        className="pressable flex w-full items-center gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-white/[0.02] px-4 py-3 text-left"
                       >
                         <Avatar name={r.id} size={36} />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-mono text-[13px] font-semibold">{r.id}</span>
                           <span className="block text-[11px] text-[var(--text-muted)]">
-                            {r.role === "host" ? "Hosted" : "Joined"} ·{" "}
-                            {new Date(r.at).toLocaleDateString()}
+                            {r.role === "host" ? "Hosted" : "Joined"} · {new Date(r.at).toLocaleDateString()}
                           </span>
                         </span>
                         <Icons.Phone size={16} className="text-[var(--text-muted)]" />
@@ -289,15 +294,14 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Trust strip (§38) */}
-        <p className="mx-auto flex items-center gap-2 text-center text-xs text-[var(--text-muted)]">
-          <Icons.Lock size={13} />
-          Your connection is secure — media flows directly between you two and is never stored.
+        <p className="mx-auto flex items-center gap-2 text-center text-[11px] uppercase tracking-[0.14em] text-[var(--text-muted)]">
+          <Icons.Lock size={12} />
+          Media flows directly between you two and is never stored.
         </p>
       </main>
 
-      <footer className="border-t border-[var(--border-subtle)] px-6 py-5 text-center text-xs text-[var(--text-muted)]">
-        Built with Next.js + PeerJS + WebRTC · <span className="text-[var(--text-secondary)]">Designed and Developed by Yash Shekhar</span>
+      <footer className="border-t border-[var(--border-subtle)] px-4 py-4 text-center text-[11px] uppercase tracking-[0.12em] text-[var(--text-muted)] md:px-8">
+        Built for private calls · <span className="text-[var(--text-secondary)]">Yash Shekhar</span>
       </footer>
     </div>
   );
