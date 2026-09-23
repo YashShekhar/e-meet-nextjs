@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { MediaConnection, Peer } from "peerjs";
+import { isSoundOn, playSound, setSoundOn } from "@/lib/sounds";
 import {
   Avatar,
   BottomSheet,
@@ -153,6 +154,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const [remoteStreamState, setRemoteStreamState] = useState<MediaStream | null>(null);
   const [meterTick, setMeterTick] = useState(0);
+  const [soundOn, setSoundOnState] = useState(true);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted pref is external
+    setSoundOnState(isSoundOn());
+  }, []);
   const localLevel = useAudioLevel(micOn ? localStreamState : null, meterTick);
   const remoteLevel = useAudioLevel(remoteStreamState, meterTick);
   // First user gesture re-arms meters (suspended AudioContext → running).
@@ -450,6 +456,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     setMicOn(next);
     setMicPulse((n) => n + 1);
     buzz(10);
+    playSound(next ? "unmute" : "mute");
     pushToast(setToasts, next ? "Microphone on" : "Microphone muted");
   }, []);
 
@@ -513,6 +520,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       await navigator.clipboard.writeText(inviteLink);
       setCopied(true);
       buzz(10);
+      playSound("copy");
       pushToast(setToasts, "Link copied");
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -999,18 +1007,56 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     error: { label: "Couldn't connect", tone: "danger" },
   };
 
-  // Toast on transitions: connected / restored / ended (§29)
+  // Keyboard map: M mic · C camera · E leave · Esc close (§20).
+  // Ignored while typing in an input so shortcuts never eat text.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "escape") {
+        setSheetOpen(false);
+        return;
+      }
+      if (k === "m") toggleMic();
+      else if (k === "c") toggleCam();
+      else if (k === "e") {
+        buzz(30);
+        playSound("end");
+        handleLeave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleMic, toggleCam, handleLeave]);
+
+  // Toast + sound on transitions: connected / ended / error (§8–§9)
+  const prevHasRemoteRef = useRef(false);
   useEffect(() => {
     const prev = prevStatusRef.current;
     if (status === "connected" && prev !== "connected") {
       pushToast(setToasts, "You're connected");
       buzz([12, 40, 12]);
+      playSound("connect");
     }
     if (status === "ended" && prev === "connected") {
       pushToast(setToasts, "Call ended");
+      playSound("end");
+    }
+    if (status === "error" && prev !== "error") {
+      playSound("error");
     }
     prevStatusRef.current = status;
   }, [status]);
+
+  // Peer join/leave chimes track the remote stream, not status.
+  useEffect(() => {
+    const had = prevHasRemoteRef.current;
+    if (hasRemote && !had) playSound("join");
+    if (!hasRemote && had) playSound("leave");
+    prevHasRemoteRef.current = hasRemote;
+  }, [hasRemote]);
 
   // Auto-hide controls when idle during a call (§12: quiet when idle).
   // Touch users keep controls; mouse users reveal on movement.
@@ -1040,6 +1086,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   const friendly = error ? friendlyError(error) : null;
   const inCall = status === "connected" || (status === "connecting" && hasRemote);
+  // Full-chrome auto-hide: header, dock and caption leave together (§11).
+  const chromeHidden = controlsHidden && status === "connected";
   // Connection snapshot for diagnostics — polled while the sheet is open
   // (refs can't be read during render).
   const [connState, setConnState] = useState<string | null>(null);
@@ -1062,14 +1110,16 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     hasRemote && status === "connected" && remoteAudioTracks.length > 0 && !speaking;
 
   return (
-    <div className="flex min-h-dvh flex-1 flex-col">
-      {/* Top bar — overlays the stage during a call (§13) */}
+    <div className={`flex flex-1 flex-col ${inCall ? "h-dvh overflow-hidden" : "min-h-dvh"}`}>
+      {/* Top bar — overlays the stage during a call (§13), hides with chrome (§11) */}
       <header
-        className={`z-20 flex shrink-0 items-center justify-between gap-3 px-4 pt-[calc(env(safe-area-inset-top)+12px)] md:px-6 ${
-          inCall ? "pointer-events-none absolute inset-x-0 top-0" : ""
+        className={`z-20 flex shrink-0 items-center justify-between gap-3 px-4 pt-[calc(env(safe-area-inset-top)+12px)] transition-all duration-300 md:px-6 ${
+          inCall
+            ? `absolute inset-x-0 top-0 ${chromeHidden ? "pointer-events-none -translate-y-2 opacity-0" : "pointer-events-none"}`
+            : ""
         }`}
       >
-        <div className={`flex min-w-0 items-center gap-2.5 ${inCall ? "pointer-events-auto" : ""}`}>
+        <div className={`flex min-w-0 items-center gap-2.5 ${inCall && !chromeHidden ? "pointer-events-auto" : ""}`}>
           <button
             onClick={handleLeave}
             aria-label="Leave call"
@@ -1087,7 +1137,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           </div>
         </div>
 
-        <div className={`flex shrink-0 items-center gap-2 ${inCall ? "pointer-events-auto" : ""}`}>
+        <div className={`flex shrink-0 items-center gap-2 ${inCall && !chromeHidden ? "pointer-events-auto" : ""}`}>
           <span className="glass hidden items-center gap-1.5 rounded-full px-3 py-2 text-[11px] font-medium text-[var(--text-secondary)] sm:inline-flex">
             <Icons.Lock size={12} /> Private call
           </span>
@@ -1132,8 +1182,17 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         </div>
       )}
 
-      {/* Stage (§13): full-screen remote, floating self, calm states */}
-      <main className="flex min-h-0 flex-1 flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] md:px-6">
+      {/* Stage (§13): fixed-viewport shell in call, calm flow otherwise.
+          In-call NEVER scrolls — video fills, chrome floats (§18). */}
+      <main
+        className={
+          inCall
+            ? `relative mx-3 mb-[calc(env(safe-area-inset-bottom)+12px)] min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] md:mx-4 ${
+                chromeHidden ? "stage-idle" : ""
+              }`
+            : "flex min-h-0 flex-1 flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] md:px-6"
+        }
+      >
         {status === "ended" && !roomDeleted ? (
           <div className="rise-in mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
             <Avatar name={roomId} size={80} />
@@ -1147,8 +1206,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             </div>
           </div>
         ) : status === "waiting" && isHost && !hasRemote ? (
-          /* Calm waiting room (§12) */
-          <div className="rise-in mx-auto flex w-full max-w-lg flex-1 flex-col justify-center gap-4 py-8">
+          /* Calm waiting room (§12) — scrolls internally on short viewports */
+          <div className="rise-in mx-auto flex w-full max-w-lg flex-1 flex-col justify-center gap-4 overflow-y-auto py-6">
             <div className="overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)]">
               <div className="relative aspect-video">
                 <video
@@ -1188,43 +1247,38 @@ export default function RoomClient({ roomId }: { roomId: string }) {
               </Button>
             </div>
           </div>
-        ) : (
+        ) : inCall ? (
+          /* Active call — every layer floats over video, nothing scrolls (§11, §13) */
           <>
-            {/* Remote stage */}
-            <div
-              className={`relative mt-3 min-h-[46dvh] flex-1 overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] ${
-                inCall ? "md:min-h-[62dvh]" : ""
-              }`}
-            >
-              {hasRemote ? (
-                <video
-                  key="remote"
-                  ref={remoteVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  controls={false}
-                  className="join-in h-full min-h-[46dvh] w-full bg-black object-cover"
-                />
-              ) : (
+            {hasRemote ? (
+              <video
+                key="remote"
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                muted
+                controls={false}
+                className="join-in absolute inset-0 h-full w-full bg-black object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0">
                 <VideoPlaceholder
                   name={isHost ? "Guest" : "Host"}
-                  connecting={status === "connecting" || status === "initializing"}
-                  caption={
-                    status === "initializing"
-                      ? "Finding your connection…"
-                      : status === "connecting"
-                        ? `Connecting…${retryCount ? ` (retry ${retryCount}/3)` : ""}`
-                        : status === "error"
-                          ? "No one is here yet."
-                          : "Waiting for the other person…"
-                  }
+                  connecting
+                  caption={`Connecting…${retryCount ? ` (retry ${retryCount}/3)` : ""}`}
                 />
-              )}
-              {/* Hidden voice channel — the ONLY audible remote path. */}
-              <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+              </div>
+            )}
+            {/* Hidden voice channel — the ONLY audible remote path. */}
+            <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-              {/* Top-left presence + live peer voice meter */}
+            {/* Chrome block — fades as one unit when idle (§11) */}
+            <div
+              className={`pointer-events-none absolute inset-0 z-10 transition-all duration-300 ${
+                chromeHidden ? "opacity-0" : "opacity-100"
+              }`}
+            >
+              {/* Presence + peer voice meter */}
               <div className="absolute left-3 top-3 flex items-center gap-2">
                 <span className="glass rounded-full px-3 py-1.5 text-[11px] font-medium text-white">
                   {hasRemote ? (isHost ? "Guest" : "Host") : "No one here yet"}
@@ -1242,7 +1296,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                   </span>
                 )}
               </div>
-              {/* Mic/cam flags */}
+              {/* Self flags */}
               <div className="absolute right-3 top-3 flex gap-1.5">
                 {!micOn && (
                   <span className="rounded-full bg-[var(--danger)] px-2.5 py-1 text-[11px] font-medium text-white">
@@ -1256,62 +1310,110 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 )}
               </div>
 
-              {audioBlocked && hasRemote && (
-                <button
-                  onClick={unlockRemoteAudio}
-                  className="pressable absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-[var(--warning)] px-4 py-2.5 text-xs font-semibold text-black"
-                >
-                  Tap to enable audio
-                </button>
-              )}
-              {peerSilent && !audioBlocked && (
-                <p className="glass absolute bottom-3 left-3 z-10 max-w-[220px] rounded-[12px] px-3 py-2 text-[11px] leading-4 text-[var(--text-secondary)]">
-                  No voice from peer right now — they may be muted, or their mic hears nothing. Check <b>More → Audio health</b>.
-                </p>
-              )}
-
-              {/* Floating self-preview (§13) */}
-              <div className="absolute bottom-3 right-3 w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36 md:w-48">
-                <div className="relative aspect-video">
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className={`h-full w-full scale-x-[-1] bg-black object-cover ${!camOn ? "invisible" : ""}`}
-                  />
-                  {!camOn && (
-                    <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
-                      <Avatar name="You" size={40} />
-                    </div>
-                  )}
-                </div>
-                <p className="flex items-center justify-center gap-1.5 bg-[rgba(10,10,12,0.85)] px-2 py-1 text-center text-[10px] text-[var(--text-secondary)]">
+              {/* Floating self-preview — exact 16:9 card, label overlaid (§13) */}
+              <div className="pointer-events-auto absolute bottom-24 right-3 aspect-video w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36 md:w-44">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-cover ${!camOn ? "invisible" : ""}`}
+                />
+                {!camOn && (
+                  <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
+                    <Avatar name="You" size={40} />
+                  </div>
+                )}
+                <p className="scrim absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 px-2 py-1 text-center text-[10px] text-[var(--text-secondary)]">
                   You{!micOn ? " · muted" : ""}
                   {micOn && <LevelDots level={localLevel} label="Your mic level — speak to see it move" />}
                 </p>
               </div>
+
+              {/* Dock + caption — bottom center, above safe area */}
+              <div className="absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+14px)] flex flex-col items-center gap-2">
+                <div className="glass pointer-events-auto flex items-center gap-2 rounded-full p-2 shadow-2xl">
+                  <IconButton label={micOn ? "Mute microphone (M)" : "Unmute microphone (M)"} onClick={toggleMic} off={!micOn}>
+                    <span key={micPulse} className="mic-pop grid place-items-center">
+                      {micOn ? <Icons.Mic size={20} /> : <Icons.MicOff size={20} />}
+                    </span>
+                  </IconButton>
+                  <IconButton label={camOn ? "Turn camera off (C)" : "Turn camera on (C)"} onClick={toggleCam} off={!camOn}>
+                    {camOn ? <Icons.Video size={20} /> : <Icons.VideoOff size={20} />}
+                  </IconButton>
+                  <IconButton label="More options (Esc closes)" onClick={() => setSheetOpen(true)}>
+                    <Icons.More size={20} />
+                  </IconButton>
+                  <IconButton label="End call (E)" danger onClick={() => { buzz(30); playSound("end"); handleLeave(); }}>
+                    <Icons.PhoneOff size={20} />
+                  </IconButton>
+                </div>
+                <p className="scrim flex items-center gap-1.5 rounded-full px-3 py-1 text-center text-[11px] text-[var(--text-muted)]">
+                  <Icons.Lock size={11} /> Private call · nothing is recorded or stored
+                </p>
+              </div>
             </div>
 
-            {/* Invite strip when waiting/connecting (guest view) */}
-            {!hasRemote && (status === "waiting" || status === "connecting") && (
-              <div className="mx-auto mt-3 flex max-w-full flex-wrap items-center justify-center gap-2 text-xs text-[var(--text-secondary)]">
-                <code className="max-w-full truncate rounded-full border border-[var(--border-subtle)] bg-white/[0.04] px-3 py-1.5 font-mono">
-                  {inviteLink}
-                </code>
-                <button onClick={handleCopy} className="pressable rounded-full border border-[var(--border-subtle)] px-3 py-1.5 hover:bg-white/10">
-                  {copied ? "Copied" : "Copy"}
-                </button>
-              </div>
+            {/* Prompts live outside the chrome so they surface even when hidden */}
+            {audioBlocked && hasRemote && (
+              <button
+                onClick={unlockRemoteAudio}
+                className="pressable absolute bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-full bg-[var(--warn)] px-4 py-2.5 text-xs font-semibold text-black"
+              >
+                Tap to enable audio
+              </button>
             )}
-
-            {/* Control dock (§14–15) — floats, hides when idle */}
-            <div
-              className={`sticky bottom-[calc(env(safe-area-inset-bottom)+12px)] z-20 mt-3 flex justify-center transition-all duration-300 ${
-                controlsHidden && status === "connected" ? "translate-y-3 opacity-0" : "translate-y-0 opacity-100"
-              }`}
-            >
-              <div className="glass flex items-center gap-2 rounded-full p-2 shadow-2xl">
+            {peerSilent && !audioBlocked && (
+              <p className="glass absolute bottom-28 left-3 z-20 max-w-[220px] rounded-[12px] px-3 py-2 text-[11px] leading-4 text-[var(--text-secondary)]">
+                No voice from peer right now — they may be muted, or their mic hears nothing. Check <b>More → Audio health</b>.
+              </p>
+            )}
+          </>
+        ) : (
+          /* Pre-join connecting state — fixed height, never pushes past viewport */
+          <div className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-3 py-6">
+            <div className="relative h-[44dvh] max-h-[520px] min-h-[280px] overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)]">
+              <div className="absolute inset-0">
+                <VideoPlaceholder
+                  name={isHost ? "Guest" : "Host"}
+                  connecting={status === "connecting" || status === "initializing"}
+                  caption={
+                    status === "initializing"
+                      ? "Finding your connection…"
+                      : status === "connecting"
+                        ? `Connecting…${retryCount ? ` (retry ${retryCount}/3)` : ""}`
+                        : status === "error"
+                          ? "No one is here yet."
+                          : "Waiting for the other person…"
+                  }
+                />
+              </div>
+              <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+              <div className="absolute bottom-3 right-3 aspect-video w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-cover ${!camOn ? "invisible" : ""}`}
+                />
+                {!camOn && (
+                  <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
+                    <Avatar name="You" size={36} />
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="mx-auto flex max-w-full flex-wrap items-center justify-center gap-2 text-xs text-[var(--text-secondary)]">
+              <code className="max-w-full truncate rounded-full border border-[var(--border-subtle)] bg-white/[0.04] px-3 py-1.5 font-mono">
+                {inviteLink}
+              </code>
+              <button onClick={handleCopy} className="pressable rounded-full border border-[var(--border-subtle)] px-3 py-1.5 hover:bg-white/10">
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="flex justify-center">
+              <div className="glass flex items-center gap-2 rounded-full p-2">
                 <IconButton label={micOn ? "Mute microphone" : "Unmute microphone"} onClick={toggleMic} off={!micOn}>
                   <span key={micPulse} className="mic-pop grid place-items-center">
                     {micOn ? <Icons.Mic size={20} /> : <Icons.MicOff size={20} />}
@@ -1323,16 +1425,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 <IconButton label="More options" onClick={() => setSheetOpen(true)}>
                   <Icons.More size={20} />
                 </IconButton>
-                <IconButton label="End call" danger onClick={() => { buzz(30); handleLeave(); }}>
+                <IconButton label="End call" danger onClick={() => { buzz(30); playSound("end"); handleLeave(); }}>
                   <Icons.PhoneOff size={20} />
                 </IconButton>
               </div>
             </div>
-
-            <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[11px] text-[var(--text-muted)]">
-              <Icons.Lock size={11} /> Private call · nothing is recorded or stored
-            </p>
-          </>
+          </div>
         )}
       </main>
 
@@ -1347,7 +1445,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 <p className="text-xs text-[var(--text-muted)]">Security code — read it aloud to verify</p>
                 <p className="font-mono text-sm font-semibold tracking-widest">{securityCode}</p>
               </div>
-              <Icons.Lock size={18} className="text-[var(--success)]" />
+              <Icons.Lock size={18} className="text-[var(--live)]" />
             </div>
           )}
           <button onClick={handleCopy} className="pressable flex items-center gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3 text-left text-sm">
@@ -1359,6 +1457,20 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             className="pressable flex items-center gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3 text-left text-sm"
           >
             <Icons.Refresh size={18} /> Reconnect camera & mic
+          </button>
+          <button
+            onClick={() => {
+              const next = !soundOn;
+              setSoundOn(next);
+              setSoundOnState(next);
+              if (next) playSound("unmute");
+            }}
+            className="pressable flex items-center gap-3 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 py-3 text-left text-sm"
+            aria-pressed={soundOn}
+          >
+            {soundOn ? <Icons.Mic size={18} /> : <Icons.MicOff size={18} />}
+            {soundOn ? "Sounds on" : "Sounds off"}
+            <span className="ml-auto text-[11px] text-[var(--text-muted)]">tap to toggle</span>
           </button>
           {isHost && (
             <button

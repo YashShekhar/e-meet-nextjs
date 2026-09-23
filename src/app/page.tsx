@@ -139,7 +139,7 @@ export default function Home() {
       {/* Minimal top nav (§31) */}
       <header className="flex items-center justify-between px-5 py-5 md:px-10">
         <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[image:var(--gradient-accent)] text-sm font-bold text-white">
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--action)] text-sm font-bold text-[var(--action-ink)]">
             E²
           </div>
           <div>
@@ -168,13 +168,13 @@ export default function Home() {
               Simple, private 1-to-1 video conversations without the clutter.
             </p>
 
-            {/* Stylized live-call composition */}
+            {/* Quiet preview of the call stage — flat, one idea */}
             <div className="relative mt-8 overflow-hidden rounded-[20px] border border-[var(--border-subtle)] bg-[var(--background)]">
-              <div className="flex aspect-[16/9] items-center justify-center gap-3 bg-[radial-gradient(circle_at_30%_30%,rgba(124,92,255,0.22),transparent_55%),radial-gradient(circle_at_75%_75%,rgba(84,168,255,0.14),transparent_50%),#0c0c10]">
+              <div className="flex aspect-[16/9] items-center justify-center gap-3">
                 <Avatar name="A" size={56} state="live" />
                 <div className="text-left">
-                  <p className="text-sm font-semibold text-white">Guest is here</p>
-                  <p className="text-xs text-[var(--text-secondary)]">Preview of your call stage</p>
+                  <p className="text-sm font-semibold text-white">Your room</p>
+                  <p className="text-xs text-[var(--text-secondary)]">Video fills the screen. Controls appear when you move.</p>
                 </div>
               </div>
               <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[rgba(16,16,20,0.8)] p-2 backdrop-blur-md">
@@ -188,7 +188,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="absolute left-3 top-3">
-                <StatusPill tone="live" pulse>Live</StatusPill>
+                <StatusPill tone="live" pulse>Private</StatusPill>
               </div>
             </div>
 
@@ -236,7 +236,7 @@ export default function Home() {
                   spellCheck={false}
                   aria-invalid={!!joinError}
                   aria-label="Invite code"
-                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm uppercase tracking-widest outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
+                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm uppercase tracking-widest outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-white/40"
                 />
                 <Button type="submit" variant="secondary" disabled={!joinId.trim()}>
                   Continue

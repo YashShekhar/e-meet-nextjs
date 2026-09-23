@@ -1,1823 +1,356 @@
-# DESIGN.md --- 1-to-1 Video Chat Application
+# DESIGN.md — E-Meet 1-to-1 Video Calls
 
-## 1. Product Vision
+> **Does this make the conversation feel more natural, private, and effortless?**
+> If yes, keep it. If it only makes the interface look more complicated, remove it.
+> The product is a **quiet digital room for two people**, not conferencing software.
 
-Build a premium, modern 1-to-1 video communication experience that
-feels:
+---
 
--   Fast
--   Private
--   Minimal
--   Human
--   Cinematic
--   Responsive across desktop, tablet, and mobile
--   Native-like on mobile without looking like a stretched desktop
-    website
+## 0. Hard rules (non-negotiable)
 
-The visual direction should feel like a combination of **modern
-fintech + premium communication apps + futuristic spatial UI**, while
-avoiding excessive glassmorphism, neon overload, or unnecessary
-decoration.
+1. **No gradients.** No `linear-gradient`, no `radial-gradient`, no gradient text,
+   no gradient buttons, no gradient avatars, no ambient color blobs. Depth comes
+   from blur, borders, shadows, and motion — never from color blends.
+2. **No purple, no blue.** The palette is monochrome + three semantic colors
+   (emerald / amber / red). Accent actions are **white on black**.
+3. **The call screen never scrolls.** It is a fixed-viewport shell (`100dvh`,
+   `overflow: hidden`). Chrome floats over video and auto-hides. If content does
+   not fit a 13" laptop viewport, the design is wrong, not the screen.
+4. **No generated-looking decoration.** No hero mock-cards, no floating
+   illustration clusters, no stat chips, no purple glow. One idea per screen.
+5. **Sound and hover are features, not garnish.** Every control has a hover
+   state, a press state, and (where it matters) a soft sound. All specified below.
 
-### Design keywords
+---
 
-`Calm` · `Premium` · `Fluid` · `Immersive` · `Private` · `Futuristic` ·
-`Human`
+## 1. Product vision
 
-------------------------------------------------------------------------
+A calm, private 1-to-1 video call that feels like looking through glass —
+present, quiet, human. Desktop, tablet, and mobile. Touch-first, mouse-polished.
 
-# 2. Core Design Principles
+Design keywords: `Quiet` · `Flat` · `Tactile` · `Alive` · `Private` · `Human`
 
-## 2.1 Video is the hero
+---
 
-The remote participant should always be the visual priority.
+## 2. Core principles
 
-Avoid UI that competes with the video.
+1. **Video is the room.** Remote video fills the viewport. UI is a guest on top
+   of it, never beside it.
+2. **Chrome appears on demand.** Header and controls fade in on mouse movement,
+   hover near edges, touch, or keyboard input — and fade out after ~3.5s of
+   stillness during a call. The cursor hides with them on fine-pointer devices.
+3. **Flat surfaces, glass controls.** Cards are flat (`#101014`). Only floating
+   call chrome (dock, self-preview frame, toasts, sheets) is glass.
+4. **Motion answers touch.** Every state change animates with purpose:
+   connecting breathes, joining resolves from blur, leaving dissolves.
+5. **Sound confirms action.** Mute, unmute, join, leave, connect, and errors each
+   have a short synthesized tone (see §8). Never silent, never noisy.
+6. **Trust is quiet.** A small lock + "Private" label. Crypto details live one
+   tap away in More — never on the stage.
 
-## 2.2 Controls should disappear when not needed
+---
 
-During an active call, controls should be available but visually quiet.
+## 3. Color system (flat, monochrome + semantic)
 
--   Move mouse/touch → controls appear
--   Stay idle → controls fade away
--   Tap video → controls toggle on mobile
--   Important actions remain reachable
-
-## 2.3 Motion should communicate state
-
-Animations must have meaning.
-
-Use motion for:
-
--   Connecting
--   Ringing
--   Joining
--   Muting
--   Camera state
--   Network quality
--   Participant joining/leaving
--   Call ending
--   Errors
--   Success states
-
-Avoid animations that exist only for decoration.
-
-## 2.4 Touch-first responsive design
-
-The application must work naturally on:
-
--   Mobile portrait
--   Mobile landscape
--   Tablet portrait
--   Tablet landscape
--   Laptop
--   Desktop
--   Ultrawide monitor
-
-Design mobile layouts independently rather than simply shrinking desktop
-layouts.
-
-------------------------------------------------------------------------
-
-# 3. Visual Direction
-
-## 3.1 Overall aesthetic
-
-Use a dark-first premium interface.
-
-Primary visual language:
-
--   Deep charcoal/black backgrounds
--   Soft gradients
--   Subtle borders
--   Large rounded corners
--   High-quality typography
--   Soft shadows
--   Controlled blur
--   Very subtle noise/grain
--   Large whitespace
--   Smooth transitions
-
-Do not use heavy borders or dense dashboards.
-
-------------------------------------------------------------------------
-
-# 4. Color System
-
-Use semantic design tokens instead of hardcoded colors.
-
-``` css
+```css
 :root {
-  --background: #070709;
-  --surface: #101014;
-  --surface-elevated: #17171d;
-  --surface-hover: #1d1d25;
+  --background: #0a0a0b;        /* app canvas */
+  --surface: #131316;           /* flat cards */
+  --surface-elevated: #1b1b1f;  /* sheets, dock */
+  --surface-hover: #232328;     /* hover fill */
 
-  --text-primary: #f7f7f8;
-  --text-secondary: #a5a5ad;
-  --text-muted: #707078;
+  --text-primary: #f5f5f4;
+  --text-secondary: #a8a8ad;
+  --text-muted: #6e6e75;
 
   --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.16);
 
-  --accent: #7c5cff;
-  --accent-soft: rgba(124, 92, 255, 0.18);
+  --action: #f5f5f4;            /* primary buttons: white bg, black text */
+  --action-ink: #0a0a0b;
 
-  --success: #35d49a;
-  --warning: #f5b942;
-  --danger: #ff5f6d;
-  --info: #54a8ff;
+  --live: #34d399;              /* connected / speaking */
+  --warn: #f5b942;              /* waiting / enable-audio nudge */
+  --danger: #ff5f6d;            /* end call / destructive / muted mic */
 }
 ```
-
-## Gradient language
-
-Use gradients sparingly.
-
-Example:
-
-``` css
---gradient-accent:
-  linear-gradient(135deg, #7c5cff 0%, #b65cff 100%);
-```
-
-For ambient backgrounds:
-
-``` css
-background:
-  radial-gradient(
-    circle at 20% 20%,
-    rgba(124, 92, 255, 0.16),
-    transparent 35%
-  ),
-  radial-gradient(
-    circle at 80% 70%,
-    rgba(84, 168, 255, 0.10),
-    transparent 35%
-  ),
-  var(--background);
-```
-
-The gradient should feel like ambient lighting, not a colorful
-wallpaper.
-
-------------------------------------------------------------------------
-
-# 5. Typography
-
-Use a modern sans-serif.
-
-Preferred stack:
-
-``` css
-font-family:
-  Inter,
-  ui-sans-serif,
-  system-ui,
-  -apple-system,
-  BlinkMacSystemFont,
-  "Segoe UI",
-  sans-serif;
-```
-
-If using a custom font, prefer:
-
--   Inter
--   Geist
--   Manrope
-
-## Typography scale
-
-``` text
-Display:     48–64px
-H1:          36–48px
-H2:          28–36px
-H3:          20–24px
-Body:        15–17px
-Small:       13–14px
-Caption:     11–12px
-```
-
-Use font weight rather than oversized text for hierarchy.
-
-------------------------------------------------------------------------
-
-# 6. Spacing System
-
-Use a consistent 4px/8px-based spacing system.
-
-``` text
-4px
-8px
-12px
-16px
-20px
-24px
-32px
-40px
-48px
-64px
-80px
-```
-
-Recommended component padding:
-
-``` text
-Small control:     8–12px
-Normal control:    12–16px
-Card:              20–24px
-Large section:     32–48px
-```
-
-------------------------------------------------------------------------
-
-# 7. Border Radius
-
-Use generous but controlled rounding.
-
-``` text
-Small:       10px
-Button:      12–14px
-Card:        18–24px
-Video:       20–28px
-Modal:       24–32px
-Pill:        999px
-```
-
-The call interface should feel soft and approachable.
-
-------------------------------------------------------------------------
-
-# 8. Application Structure
-
-## Primary screens
-
-``` text
-Landing / Welcome
-        ↓
-Authentication
-        ↓
-Home
-        ↓
-Create / Join Call
-        ↓
-Waiting Room
-        ↓
-Active Call
-        ↓
-Call Ended
-        ↓
-Home
-```
-
-Optional:
-
-``` text
-Profile
-Settings
-Call History
-Privacy
-Devices
-Appearance
-Notifications
-```
-
-------------------------------------------------------------------------
-
-# 9. Landing Page
-
-The landing page should immediately communicate:
-
-> "Talk to someone. Instantly."
-
-## Hero
-
-Large headline:
-
-``` text
-Talk face to face.
-Anywhere.
-```
-
-Supporting text:
-
-``` text
-Simple, private 1-to-1 video conversations
-without the clutter.
-```
-
-Primary CTA:
-
-``` text
-Start a call
-```
-
-Secondary CTA:
-
-``` text
-Join a call
-```
-
-## Hero visual
-
-Show a stylized live-call composition:
-
--   Large participant video
--   Floating self-preview
--   Small call controls
--   Ambient gradient
--   Subtle animated background
-
-The hero should have slow ambient motion.
-
-------------------------------------------------------------------------
-
-# 10. Home Screen
-
-Desktop layout:
-
-``` text
-┌─────────────────────────────────────────────────────────┐
-│ Logo                              Profile / Settings     │
-│                                                         │
-│                  Welcome back                           │
-│           Ready to talk to someone?                     │
-│                                                         │
-│       ┌────────────────┐   ┌────────────────┐           │
-│       │                │   │                │           │
-│       │  Start Call    │   │  Join Call     │           │
-│       │                │   │                │           │
-│       └────────────────┘   └────────────────┘           │
-│                                                         │
-│                 Recent calls                            │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
-
-Mobile:
-
-``` text
-┌──────────────────────┐
-│ Logo          Avatar │
-│                      │
-│ Hey there 👋         │
-│ Ready to connect?    │
-│                      │
-│ ┌──────────────────┐ │
-│ │   Start a Call   │ │
-│ └──────────────────┘ │
-│                      │
-│ ┌──────────────────┐ │
-│ │    Join Call     │ │
-│ └──────────────────┘ │
-│                      │
-│ Recent               │
-│ ───────────────────  │
-│ Call history         │
-└──────────────────────┘
-```
-
-------------------------------------------------------------------------
-
-# 11. Join / Create Call
-
-Keep the experience extremely simple.
-
-## Create
-
-``` text
-Create a private call
-
-Your room is ready.
-
-[ Copy invite link ]
-
-[ Start call ]
-```
-
-## Join
-
-``` text
-Join a call
-
-Enter the invite code or link
-
-[                    ]
-
-[ Continue ]
-```
-
-Do not force unnecessary account creation before a call unless required
-by the product.
-
-------------------------------------------------------------------------
-
-# 12. Waiting Room
-
-The waiting room should feel calm and premium.
-
-Layout:
-
-``` text
-┌─────────────────────────────────────────────┐
-│                                             │
-│              Camera Preview                 │
-│                                             │
-│         ┌──────────────────────┐            │
-│         │                      │            │
-│         │      Your video     │            │
-│         │                      │            │
-│         └──────────────────────┘            │
-│                                             │
-│              Yash                           │
-│                                             │
-│       🎙        📹        ⚙                 │
-│                                             │
-│              [ Join call ]                  │
-│                                             │
-└─────────────────────────────────────────────┘
-```
-
-Show:
-
--   Camera preview
--   Microphone toggle
--   Camera toggle
--   Device settings
--   Display name
--   Join button
-
-------------------------------------------------------------------------
-
-# 13. Active Call --- Core Experience
-
-This is the most important screen.
-
-## Desktop
-
-Use a full-screen video stage.
-
-``` text
-┌──────────────────────────────────────────────────────────┐
-│                                                          │
-│                                                          │
-│                  REMOTE VIDEO                            │
-│                                                          │
-│                                                          │
-│                             ┌───────────────┐            │
-│                             │               │            │
-│                             │ SELF PREVIEW  │            │
-│                             │               │            │
-│                             └───────────────┘            │
-│                                                          │
-│                                                          │
-│                 ┌────────────────────────┐               │
-│                 │ Mic Camera More Leave  │               │
-│                 └────────────────────────┘               │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Video treatment
-
-Remote video:
-
--   Full viewport
--   `object-fit: cover`
--   Rounded corners only where appropriate
--   Smooth transitions
--   Background fallback when camera is disabled
-
-Self-preview:
-
--   Floating card
--   16:9 ratio
--   16--24px radius
--   Drag/reposition on desktop if desired
--   Safe-area-aware placement on mobile
-
-------------------------------------------------------------------------
-
-# 14. Call Controls
-
-Primary controls:
-
-``` text
-Microphone
-Camera
-Speaker / Audio
-More
-End Call
-```
-
-Secondary controls may include:
-
-``` text
-Screen Share
-Chat
-Participants
-Device Settings
-Report
-```
-
-## Control style
-
-Normal:
-
-``` text
-background: rgba(20,20,24,0.75)
-backdrop-filter: blur(20px)
-border: 1px solid rgba(255,255,255,0.08)
-```
-
-Use icon-only controls during the active call.
-
-Buttons should have:
-
--   48--56px touch target
--   Circular shape for primary controls
--   High contrast icons
--   Tooltip on desktop
--   Haptic feedback where supported on mobile
-
-------------------------------------------------------------------------
-
-# 15. End Call Button
-
-The end-call action should visually differ from normal controls.
-
-Use:
-
-``` text
-Danger red
-Circular button
-High contrast phone-off icon
-```
-
-On desktop:
-
-``` text
-[ 🎙 ] [ 📹 ] [ ⋯ ] [ 🔴 ]
-```
-
-On mobile, use a bottom floating control dock.
-
-------------------------------------------------------------------------
-
-# 16. Mobile Call UI
-
-Mobile should use the entire screen.
-
-Portrait:
-
-``` text
-┌──────────────────────────┐
-│ ● Connected       ⋯      │
-│                          │
-│                          │
-│                          │
-│      REMOTE VIDEO        │
-│                          │
-│                          │
-│              ┌────────┐  │
-│              │ SELF   │  │
-│              └────────┘  │
-│                          │
-│                          │
-│  🎙      📹      ⋯      🔴 │
-└──────────────────────────┘
-```
-
-Use bottom safe-area padding:
-
-``` css
-padding-bottom: env(safe-area-inset-bottom);
-```
-
-Controls must remain reachable using one hand.
-
-------------------------------------------------------------------------
-
-# 17. Responsive Breakpoints
-
-Recommended:
-
-``` text
-xs: < 480px
-sm: 480–767px
-md: 768–1023px
-lg: 1024–1439px
-xl: 1440px+
-```
-
-Do not rely only on breakpoints.
-
-Also adapt based on:
-
--   Aspect ratio
--   Orientation
--   Available height
--   Safe areas
--   Input method
--   Pointer availability
-
-------------------------------------------------------------------------
-
-# 18. Motion Design
-
-Motion is a major part of the product identity.
-
-## Motion principles
-
-Animation should be:
-
--   Fast when interacting
--   Slow when ambient
--   Smooth
--   Interruptible
--   Consistent
-
-Suggested durations:
-
-``` text
-Micro interaction: 120–180ms
-Normal transition: 180–280ms
-Modal:             250–350ms
-Page transition:   300–450ms
-Ambient motion:    4–12 seconds
-```
-
-Recommended easing:
-
-``` css
---ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
---ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
-```
-
-------------------------------------------------------------------------
-
-# 19. Signature Animations
-
-## 19.1 Connecting animation
-
-When connecting to another user:
-
-``` text
-Connecting
-   •
-  • •
- •   •
-```
-
-Use a soft pulsing radial animation.
-
-Do not use an aggressive loading spinner.
-
-## 19.2 Incoming call
-
-Create an expanding pulse around the avatar/video.
-
-``` text
-       ◯
-     ◯   ◯
-   ◯   👤  ◯
-     ◯   ◯
-       ◯
-```
-
-The pulse should be subtle.
-
-## 19.3 Participant joins
-
-Remote video should transition:
-
-``` text
-blur → focus
-opacity 0 → 1
-scale 0.98 → 1
-```
-
-Duration:
-
-``` text
-300–500ms
-```
-
-## 19.4 Participant leaves
-
-Use:
-
-``` text
-video → slight blur → fade
-```
-
-Then show a clean avatar state.
-
-## 19.5 Mic mute
-
-Animate the microphone icon with a tiny scale/bounce.
-
-Avoid large distracting animations.
-
-## 19.6 End call
-
-Use a short:
-
-``` text
-scale down → fade
-```
-
-transition before returning to the home screen.
-
-------------------------------------------------------------------------
-
-# 20. Background Ambient Motion
-
-The application can have very subtle animated gradient blobs.
-
-Example:
-
-``` text
-Blob A:
-x: 20% → 30% → 20%
-y: 20% → 30% → 20%
-
-Blob B:
-x: 80% → 70% → 80%
-y: 70% → 60% → 70%
-```
-
-Animation duration:
-
-``` text
-8–15 seconds
-```
-
-Keep opacity extremely low.
-
-The user should notice the interface feels alive, not notice the
-animation itself.
-
-------------------------------------------------------------------------
-
-# 21. Glass UI
-
-Use glass effects selectively.
-
-Good:
-
--   Call control dock
--   Self-preview
--   Settings panels
--   Floating notifications
--   Modal overlays
-
-Avoid:
-
--   Every card being glass
--   Excessive blur
--   Text on low-contrast backgrounds
--   Glass over highly detailed video
-
-Example:
-
-``` css
-.glass {
-  background: rgba(18, 18, 22, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
-```
-
-------------------------------------------------------------------------
-
-# 22. Component Design System
-
-Create reusable components.
-
-``` text
-components/
-├── Button
-├── IconButton
-├── Avatar
-├── VideoTile
-├── SelfPreview
-├── CallControls
-├── CallStatus
-├── ConnectionIndicator
-├── DeviceSelector
-├── Modal
-├── BottomSheet
-├── Toast
-├── Tooltip
-├── Input
-├── CopyButton
-└── Skeleton
-```
-
-------------------------------------------------------------------------
-
-# 23. Buttons
-
-## Primary
-
-Used for:
-
--   Start Call
--   Join Call
--   Continue
-
-Style:
-
--   Accent gradient or solid accent
--   48px minimum height
--   12--14px radius
--   Strong typography
-
-## Secondary
-
-Used for:
-
--   Settings
--   Device selection
--   Copy link
-
-Use muted surface background.
-
-## Destructive
-
-Used for:
-
--   End Call
--   Remove session
--   Leave
-
-Use danger semantic color.
-
-------------------------------------------------------------------------
-
-# 24. Icons
-
-Use one icon family consistently.
-
-Recommended:
-
--   Lucide
--   Phosphor
--   Hugeicons
-
-Do not mix multiple icon libraries.
-
-Icons should generally be:
-
-``` text
-16px — inline
-20px — standard
-24px — buttons
-28px — prominent controls
-```
-
-------------------------------------------------------------------------
-
-# 25. Avatar System
-
-Avatar states:
-
-``` text
-Online
-Connecting
-In call
-Muted
-Camera off
-Offline
-```
-
-Use subtle status indicators.
-
-Example:
-
-``` text
-● Online
-● Connecting
-● In call
-```
-
-Avoid large status badges.
-
-------------------------------------------------------------------------
-
-# 26. Connection Quality
-
-Connection quality should be visible but unobtrusive.
-
-Example:
-
-``` text
-Excellent   ●●●
-Good        ●●○
-Poor        ●○○
-```
-
-If connection becomes poor:
-
-1.  Show subtle indicator
-2.  Add small toast
-3.  If persistent, show actionable message
-
-Example:
-
-``` text
-Connection is unstable
-Try moving closer to your Wi-Fi router.
-```
-
-Do not constantly display technical WebRTC information.
-
-------------------------------------------------------------------------
-
-# 27. Loading States
-
-Never leave the user staring at a blank screen.
-
-Use:
-
--   Skeletons
--   Soft shimmer
--   Pulsing avatar
--   Video placeholder
--   Animated status text
-
-Example:
-
-``` text
-Finding your connection...
-```
-
-Then:
-
-``` text
-Connecting...
-```
-
-Then:
-
-``` text
-You're connected
-```
-
-------------------------------------------------------------------------
-
-# 28. Error States
-
-Errors should be human-readable.
-
-Bad:
-
-``` text
-ICE_CONNECTION_FAILED
-```
-
-Good:
-
-``` text
-We couldn't connect the call.
-
-Check your internet connection and try again.
-```
-
-CTA:
-
-``` text
-[ Try again ]
-```
-
-------------------------------------------------------------------------
-
-# 29. Toast Notifications
-
-Toasts should appear near the bottom center on desktop.
-
-Mobile:
-
-``` text
-Bottom
-Above safe area
-```
-
-Examples:
-
-``` text
-Link copied
-Microphone muted
-Camera turned off
-Connection restored
-Call ended
-```
-
-Use subtle slide + fade animations.
-
-------------------------------------------------------------------------
-
-# 30. Bottom Sheets
-
-On mobile, prefer bottom sheets over desktop-style modal dialogs.
-
-Use for:
-
--   More options
--   Device selection
--   Settings
--   Call details
--   Report
-
-Animation:
-
-``` text
-translateY(100%) → translateY(0)
-```
-
-Duration:
-
-``` text
-250–350ms
-```
-
-Include drag handle.
-
-------------------------------------------------------------------------
-
-# 31. Desktop Navigation
-
-Keep navigation minimal.
-
-``` text
-Logo
-Home
-Calls
-Settings
-
-                    Profile
-```
-
-Avoid complex sidebar navigation unless the application grows
-significantly.
-
-------------------------------------------------------------------------
-
-# 32. Mobile Navigation
-
-Use a compact bottom navigation only if multiple primary sections are
-required.
-
-Example:
-
-``` text
-Home     Calls     Settings
-```
-
-If the application is primarily about calling, navigation can be reduced
-to:
-
-``` text
-Home + Profile
-```
-
-The call experience itself should have no persistent navigation.
-
-------------------------------------------------------------------------
-
-# 33. Dark / Light Theme
-
-Dark mode should be the primary visual identity.
-
-Light mode should still be supported.
-
-Do not simply invert colors.
-
-Light theme should use:
-
-``` text
-Warm white background
-Soft gray surfaces
-Dark typography
-Subtle borders
-Low-opacity shadows
-```
-
-Persist theme preference.
-
-Support:
-
-``` text
-System
-Light
-Dark
-```
-
-------------------------------------------------------------------------
-
-# 34. Accessibility
-
-Target WCAG AA.
-
-Requirements:
-
--   Keyboard navigation
--   Visible focus states
--   Screen-reader labels
--   Minimum 44×44px touch target
--   Sufficient text contrast
--   Do not rely only on color
--   Reduced motion support
-
-Implement:
-
-``` css
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-```
-
-------------------------------------------------------------------------
-
-# 35. Microinteractions
-
-Use tiny interactions throughout the application.
-
-Examples:
-
-### Copy button
-
-``` text
-Copy → ✓ Copied
-```
-
-### Toggle
-
-``` text
-Off → slide → On
-```
-
-### Hover
-
-``` text
-scale: 1 → 1.02
-```
-
-Keep hover effects subtle.
-
-### Press
-
-``` text
-scale: 1 → 0.96
-```
-
-Return smoothly.
-
-------------------------------------------------------------------------
-
-# 36. Page Transitions
-
-Use shared visual continuity.
-
-Example:
-
-``` text
-Home
- ↓
-Create Call
- ↓
-Waiting Room
- ↓
-Active Call
-```
-
-Avoid hard cuts.
-
-Use:
-
-``` text
-opacity
-transform
-scale
-blur
-```
-
-Do not animate large amounts of layout unnecessarily.
-
-------------------------------------------------------------------------
-
-# 37. Video Placeholder
-
-When camera is disabled:
-
-``` text
-┌──────────────────────────┐
-│                          │
-│           👤             │
-│        Yash              │
-│                          │
-└──────────────────────────┘
-```
-
-Use an avatar or initials.
-
-Background can use a very subtle gradient derived from the avatar.
-
-------------------------------------------------------------------------
-
-# 38. Privacy / Trust UI
-
-Because this is a private communication product, trust should be visible
-without becoming technical.
-
-During a call:
-
-``` text
-🔒 Private call
-```
-
-Optional expanded information:
-
-``` text
-Your connection is secure.
-```
-
-Do not expose cryptographic implementation details in the primary UI.
-
-------------------------------------------------------------------------
-
-# 39. Sound Design
-
-Keep sound minimal.
-
-Optional sounds:
-
--   Incoming call
--   Call connected
--   Call ended
--   Notification
--   Error
-
-Sounds should be:
-
--   Short
--   Soft
--   Non-annoying
--   Disableable
-
-Never autoplay unexpected audio on page load.
-
-------------------------------------------------------------------------
-
-# 40. Haptics
-
-On supported mobile devices:
-
-Use subtle haptic feedback for:
-
--   Call accepted
--   Mute toggle
--   Camera toggle
--   End call
--   Copy action
-
-Never use strong vibration for normal interactions.
-
-------------------------------------------------------------------------
-
-# 41. Performance Rules
-
-Video applications must prioritize performance.
 
 Rules:
 
--   Avoid expensive continuous React re-renders
--   Keep video elements outside unnecessary render trees
--   Prefer GPU-friendly transforms
--   Avoid animating width/height where transform works
--   Avoid large backdrop-filter surfaces
--   Lazy-load non-call screens
--   Stop unnecessary animations when not visible
--   Respect reduced-motion preferences
+- Primary action = white button, black text. Secondary = flat elevated surface.
+  Destructive = flat red. Nothing else gets a "brand color".
+- Status is never color-alone: always pair dot + label text (§34 accessibility).
+- Camera-off placeholders are flat `#131316` with a neutral avatar, not a tint.
+- Focus ring is white (`outline: 2px solid #f5f5f4`).
 
-During active calls, performance takes priority over decorative
-animation.
+---
 
-------------------------------------------------------------------------
+## 4. Typography
 
-# 42. Mobile Performance
+System sans only. No display font, no webfont dependency beyond what ships.
 
-Optimize for mid-range Android devices.
-
-Avoid:
-
--   Heavy blur everywhere
--   Multiple animated gradients
--   Large particle systems
--   Continuous canvas animations
--   Excessive shadows
--   Huge image assets
-
-The call screen should remain smooth even while video encoding/decoding
-is active.
-
-------------------------------------------------------------------------
-
-# 43. PWA / Installable Web App
-
-If this is a web application, design it as a PWA.
-
-Support:
-
--   Install prompt
--   Standalone mode
--   App icon
--   Splash screen
--   Offline shell
--   Mobile safe areas
-
-Standalone mode should remove browser-like visual assumptions.
-
-------------------------------------------------------------------------
-
-# 44. Safe Area Handling
-
-Always account for:
-
-``` css
-env(safe-area-inset-top)
-env(safe-area-inset-right)
-env(safe-area-inset-bottom)
-env(safe-area-inset-left)
+```css
+font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 ```
 
-Especially for:
+Scale: Display 40–56 · H1 32–40 · H2 24–28 · H3 18–20 · Body 15–16 ·
+Small 13–14 · Caption 11–12. Hierarchy through weight (500/600/700), not size.
 
--   Call controls
--   Bottom sheets
--   Navigation
--   Self-preview
--   Toasts
+Room codes and security codes are monospace, uppercase, letter-spaced.
 
-------------------------------------------------------------------------
+---
 
-# 45. Design Tokens
+## 5. Spacing & radius
 
-Centralize tokens.
+4px base: `4 8 12 16 20 24 32 48`. Card padding 20–24. Section gaps 16–24.
 
-Example:
+Radius: small 10 · button 14 · card 20 · video/stage 24 · sheet top 24 · pill 999.
+Call chrome is always pill or circle. Video corners are large and soft.
 
-``` ts
-export const designTokens = {
-  radius: {
-    sm: 10,
-    md: 14,
-    lg: 20,
-    xl: 28,
-    pill: 999,
-  },
+---
 
-  motion: {
-    fast: 150,
-    normal: 250,
-    slow: 400,
-  },
+## 6. App structure
 
-  spacing: {
-    xs: 4,
-    sm: 8,
-    md: 16,
-    lg: 24,
-    xl: 32,
-    xxl: 48,
-  },
-
-  control: {
-    minTouchTarget: 44,
-    callControl: 52,
-  },
-};
+```
+Home (start / join / recent)
+  → Waiting (host, pre-join calm check)
+  → Stage (active call — fixed viewport, chrome overlays)
+  → Ended (quiet receipt → home)
 ```
 
-------------------------------------------------------------------------
+No auth screens, no sidebars, no dashboards. More/Settings live in a bottom
+sheet inside the call.
 
-# 46. Recommended Animation Library
+---
 
-For React-based implementation:
+## 7. Home
 
-### Preferred
+One column on mobile, two on desktop. No mock video composition, no feature
+grid.
 
-**Framer Motion / Motion**
+- Top: wordmark + "Private" lock label. Nothing else.
+- Headline: "Talk face to face. Anywhere." + one supporting line.
+- Card 1 — Start: one sentence, one white button ("Start a call").
+- Card 2 — Join: one input (monospace code), one secondary button.
+- Recent: up to 5 rows (avatar initial, code, hosted/joined + date). Empty state:
+  "No recent calls yet."
+- Footer line: lock + "Media flows directly between you two. Nothing is stored."
 
-Use it for:
+---
 
--   Page transitions
--   Modal transitions
--   Bottom sheets
--   Microinteractions
--   Shared layout animations
--   Presence animations
+## 8. Sound design (synthesized, no assets)
 
-Use CSS transitions for simple state changes.
+All tones are WebAudio oscillator envelopes: sine/triangle, 80–120ms, low gain
+(≤0.08), with a master toggle persisted as `emeet_sound` (default ON). Never
+autoplay before first user gesture. Honor `prefers-reduced-motion` by also
+muting ambient/confirm sounds (keep error tone).
 
-Do not put every CSS property under a JavaScript animation engine.
+| Event       | Sound                                   |
+| ----------- | --------------------------------------- |
+| Connected   | soft two-note up (E5 → A5, sine)        |
+| Peer joined | single warm blip (A5, triangle, 90ms)   |
+| Peer left   | single descending blip (A4, 110ms)      |
+| Mute        | short low click (220Hz square, 60ms)    |
+| Unmute      | short higher click (440Hz, 60ms)        |
+| Call ended  | gentle three-note down (A5 F5 D5)       |
+| Error       | dull thud (140Hz, 150ms, lowpass)       |
+| Copy link   | tiny tick (1200Hz, 40ms, very quiet)    |
 
-------------------------------------------------------------------------
+Rules: one sound per event, never overlapping chimes; dock taps themselves stay
+silent except mute/unmute (the action IS the feedback). A "Sounds on/off" row
+sits in the More sheet.
 
-# 47. Suggested Motion Patterns
+---
 
-## Fade + lift
+## 9. Hover & tactile language (mouse-first polish)
 
-``` text
-opacity: 0 → 1
-translateY: 8px → 0
+Every interactive element implements all four layers:
+
+1. **Hover (fine pointer):** surface lightens to `--surface-hover`, border
+   brightens to `--border-strong`, element lifts `scale(1.04)` over 150ms
+   (`cubic-bezier(0.2, 0.8, 0.2, 1)`). Dock buttons grow a soft white ring
+   (`box-shadow: 0 0 0 4px rgba(255,255,255,0.08)`).
+2. **Tooltip:** icon-only controls show a label tooltip above the control after
+   ~400ms hover (CSS-only, `data-tip` attribute). Touch devices never depend on
+   tooltips — labels exist in the More sheet.
+3. **Press:** `scale(0.94)` + 60ms. Release springs back. Haptic `vibrate(10)`
+   on supported mobile.
+4. **Focus:** visible white outline for keyboard users; full tab order
+   (dock → header → sheet), `aria-label` on every icon button, Esc closes sheets.
+
+Cursor discipline: default arrow everywhere; `pointer` only on controls;
+during hidden-chrome call state the cursor disappears over the stage
+(`cursor: none`) and returns with the chrome.
+
+---
+
+## 10. Glass finish (where, exactly)
+
+Glass = `rgba(18,18,22,0.72)` + 1px `var(--border-subtle)` + `blur(20px)`.
+Used ONLY on: call dock, floating self-preview label strip, top overlay pills,
+toasts, bottom sheet. Never on: page cards, inputs, waiting room, hero, text
+over video (use scrim: flat `rgba(0,0,0,0.45)` behind labels instead).
+
+Performance: at most two `backdrop-filter` surfaces visible during a call
+(dock + one pill row). Self-preview video element itself is never blurred.
+
+---
+
+## 11. Auto-hiding chrome (choreography)
+
+States: `VISIBLE` ↔ `HIDDEN`. Only during `connected`.
+
+- Hide after 3500ms without mousemove / touch / keydown.
+- Show instantly on: mousemove, touchstart, keydown, incoming toast,
+  audio-blocked prompt, peer speaking after 10s silence? No — audio never
+  forces chrome (sound is the signal).
+- Transition: opacity + translateY(8px), 300ms emphasized ease. Header drifts
+  up, dock drifts down. Cursor fades with them.
+- When hidden, a 64px "hover strip" at the bottom still reveals on hover
+  (desktop) so users never hunt for controls.
+- Waiting / connecting / error / ended states: chrome is ALWAYS visible.
+  Auto-hide applies to the stage only.
+
+---
+
+## 12. Waiting room (host)
+
+Calm, single card, scrolls if the viewport is short (never clips):
+
+- Large local preview (16:9, rounded 20), camera-off → flat avatar placeholder.
+- Mic + camera circular toggles with live mic meter dots.
+- "Waiting for guest" pill (amber, pulsing dot) + one-line instruction.
+- Invite link in a flat code box + white "Copy invite link" button.
+
+---
+
+## 13. Active stage (the room)
+
+Fixed shell: `height: 100dvh; overflow: hidden`. Layers:
+
+1. Remote video: absolute fill, `object-fit: cover`, muted element (voice goes
+   to the hidden audio element). Join transition: blur 6px → 0, opacity 0 → 1,
+   scale 0.98 → 1, 450ms. Leave: blur + fade 250ms, then avatar placeholder.
+2. Scrim labels: top-left presence pill (Guest/Host + Live + peer voice dots),
+   top-right self state flags. Flat black scrim, 11px text.
+3. Self-preview: absolute bottom-right above dock zone, 112–192px wide by
+   breakpoint, 16:9, radius 16, strong border, mirrored. Label strip shows
+   "You" + mute flag + mic dots.
+4. Dock: absolute bottom center (above safe-area), glass pill, 4 controls:
+   Mic · Camera · More · End (red). 52px targets, tooltips on hover.
+5. Prompts: "Tap to enable audio" (amber pill, bottom center), peer-silence
+   hint (small glass card, bottom-left, dismisses on speech).
+6. Caption line ("Private call · nothing recorded") is part of the auto-hiding
+   chrome — it leaves with the dock.
+
+Remote-camera-off: flat placeholder with peer avatar + "Camera is off" (never
+a frozen frame).
+
+---
+
+## 14. Ended / error states
+
+Ended: centered avatar initial, "Call ended", one reassurance line, white
+Rejoin + secondary Home. 300ms settle-in (rise 8px + fade).
+
+Errors: centered card, plain-language title + one recovery sentence + white
+"Try again" + secondary "Go home". Never raw codes (`peer-unavailable`,
+`ICE failed`, HTTP numbers) in primary UI — map them (see §17).
+
+---
+
+## 15. Toasts
+
+Bottom-center, above dock zone, glass pills, slide-up + fade 250ms, 2.6s
+lifetime, max 3 stacked: "Link copied" · "Microphone muted/unmuted" ·
+"Camera on/off" · "You're connected" · "Call ended" · "Connection restored".
+
+---
+
+## 16. Bottom sheet (More)
+
+Mobile-first on all sizes, max-width 480px centered on desktop. Drag handle,
+slide-up 300ms, scrim `rgba(0,0,0,0.6)`. Rows (44px+ each): security code card
+(mono, read-aloud hint) · copy link · reconnect devices · sounds on/off ·
+host-only delete (red tint) · leave (red fill). Audio-health diagnostics block
+(mic dots + track state, peer dots + flowing/muted, connection + ICE).
+
+---
+
+## 17. Error copy map
+
+| Technical cause              | Title                          | Body                                            |
+| ---------------------------- | ------------------------------ | ----------------------------------------------- |
+| permission denied            | Camera and mic are blocked     | Allow access in the browser, then try again.    |
+| no device                    | No camera or mic found         | Check hardware, then try again.                 |
+| device busy                  | Camera or mic is busy          | Close other call apps and try again.            |
+| peer unavailable / offline   | Couldn't reach the other person| Ask them to open the link and keep it open.    |
+| room full                    | This call is full              | Calls are 1-to-1 — only two can join.           |
+| deleted (410)                | Room no longer exists          | Codes are never reused — ask for a fresh link.  |
+| signaling / network          | Connection is unstable         | Move closer to Wi-Fi, then retry.               |
+
+---
+
+## 18. Responsive contract (no-overflow guarantee)
+
+- `xs <480 · sm 480–767 · md 768–1023 · lg 1024–1439 · xl 1440+`.
+- Call shell: fixed `100dvh`, zero page scroll at every breakpoint. Self-preview
+  width: 112 (xs) → 144 (sm) → 192 (md+). Dock fits 360px wide screens.
+- Waiting/ended/error/home: normal flow, `min-height: 100dvh`, internal scroll
+  only inside the card column if needed. Test matrix: 1366×768 laptop (the
+  reported overflow), 360×640 phone, 768×1024 tablet, 1920×1080 desktop.
+- Safe areas on all floating chrome. 44px minimum targets. One-hand reach:
+  dock bottom-center on mobile.
+
+---
+
+## 19. Motion tokens
+
+```
+fast 150 (press/hover) · normal 250 (toasts/dock) · slow 400 (join/sheet)
+ease-standard: cubic-bezier(0.2,0.8,0.2,1)
+ease-emphasized: cubic-bezier(0.16,1,0.3,1)
 ```
 
-## Scale entrance
+Signature set only: breathe (connecting pulse ring) · resolve (join
+blur→focus) · dissolve (leave) · rise (cards/toasts) · pop (mic toggle 180ms).
+Ambient motion is FORBIDDEN on the call screen (performance + realism); the
+only loops are the connecting pulse and speaking dots.
 
-``` text
-opacity: 0 → 1
-scale: 0.96 → 1
-```
+---
 
-## Bottom sheet
+## 20. Accessibility
 
-``` text
-translateY(100%) → translateY(0)
-```
+WCAG AA: keyboard map (M mic · C camera · E leave · Esc close), visible focus,
+screen-reader labels on all icon buttons, live-region toasts, status text
+never color-only, `prefers-reduced-motion` kills loops + sounds confirm-only.
 
-## Tooltip
+---
 
-``` text
-opacity: 0 → 1
-scale: 0.96 → 1
-```
+## 21. Performance
 
-## Call connection pulse
+No backdrop-filter over video pixels. No animation loops during calls except
+pulse/dots. Video elements outside reactive subtrees. 60fps hover transforms
+only (transform/opacity). Mid-range Android is the bar.
 
-Use a repeating radial scale animation.
+---
 
-------------------------------------------------------------------------
+## 22. Build order
 
-# 48. Empty States
+1. Tokens + flat surfaces + type (done via globals)
+2. Sounds engine + hover/tooltip primitives
+3. Fixed call shell + overlay chrome + auto-hide
+4. Waiting / ended / error states
+5. Sheet + toasts + diagnostics
+6. Breakpoint + overflow pass (1366×768 first)
+7. A11y + reduced-motion + keyboard pass
 
-Avoid empty dashboards.
+## 23. Quality bar
 
-Example:
-
-``` text
-No recent calls
-
-Start a conversation and
-your recent calls will appear here.
-
-[ Start a call ]
-```
-
-Use a small illustration or abstract visual.
-
-------------------------------------------------------------------------
-
-# 49. Onboarding
-
-Keep onboarding under 60 seconds.
-
-Suggested flow:
-
-``` text
-Welcome
- ↓
-Camera permission
- ↓
-Microphone permission
- ↓
-Display name
- ↓
-Ready
-```
-
-Explain why permissions are required.
-
-Example:
-
-``` text
-Camera access
-
-Your camera lets the other person see you
-during a video call.
-
-[ Allow camera ]
-```
-
-------------------------------------------------------------------------
-
-# 50. Permission Denied
-
-Provide recovery instructions.
-
-``` text
-Camera access is blocked
-
-Your browser has blocked camera access.
-
-Open browser settings and allow camera access,
-then try again.
-
-[ Try again ]
-```
-
-Never trap the user in a dead-end state.
-
-------------------------------------------------------------------------
-
-# 51. Call States
-
-Design every state explicitly.
-
-``` text
-IDLE
-CONNECTING
-RINGING
-WAITING
-CONNECTED
-RECONNECTING
-POOR_CONNECTION
-REMOTE_CAMERA_OFF
-LOCAL_CAMERA_OFF
-LOCAL_MUTED
-REMOTE_MUTED
-ENDING
-ENDED
-FAILED
-```
-
-Each state should have:
-
--   Visual treatment
--   Animation
--   Text
--   Available actions
-
-------------------------------------------------------------------------
-
-# 52. Call State Visual Example
-
-``` text
-CONNECTING
-
-        ◉
-      ◉   ◉
-
-Connecting...
-```
-
-``` text
-CONNECTED
-
-🔒 Private call
-
-Remote video
-
-[ Mic ] [ Camera ] [ More ] [ End ]
-```
-
-``` text
-RECONNECTING
-
-Connection lost
-
-Trying to reconnect...
-
-[ End call ]
-```
-
-------------------------------------------------------------------------
-
-# 53. Design Anti-Patterns
-
-Do NOT build:
-
--   Generic Bootstrap-looking UI
--   Huge permanent sidebars
--   Excessive gradients
--   Excessive glassmorphism
--   Neon cyberpunk everywhere
--   Tiny mobile buttons
--   Dense settings screens
--   Full-screen loading spinners
--   Too many modal dialogs
--   Unnecessary badges
--   Excessive shadows
--   Constant animations
--   Decorative particles during video calls
-
-The product should feel premium, not visually noisy.
-
-------------------------------------------------------------------------
-
-# 54. Brand Personality
-
-The product should communicate:
-
-``` text
-"Private, simple, and beautiful."
-```
-
-Not:
-
-``` text
-"Enterprise conferencing software."
-```
-
-Avoid visual patterns strongly associated with large corporate meeting
-dashboards.
-
-The experience should feel like a direct conversation rather than a
-conference room.
-
-------------------------------------------------------------------------
-
-# 55. Example Design Language
-
-Imagine this combination:
-
-``` text
-Background
-    ↓
-Deep black / charcoal
-
-Ambient lighting
-    ↓
-Very subtle purple + blue gradients
-
-Surface
-    ↓
-Dark elevated cards
-
-Typography
-    ↓
-Clean geometric sans
-
-Corners
-    ↓
-Large + soft
-
-Controls
-    ↓
-Circular + floating
-
-Motion
-    ↓
-Fast + smooth + purposeful
-
-Video
-    ↓
-Full-screen + immersive
-
-Overall
-    ↓
-Premium + futuristic + human
-```
-
-------------------------------------------------------------------------
-
-# 56. Implementation Priority
-
-Implement the design system in this order:
-
-## Phase 1 --- Foundation
-
--   Colors
--   Typography
--   Spacing
--   Radius
--   Shadows
--   Motion tokens
--   Icons
--   Theme system
-
-## Phase 2 --- Core Components
-
--   Button
--   IconButton
--   Avatar
--   Input
--   Modal
--   BottomSheet
--   Toast
--   VideoTile
--   CallControls
-
-## Phase 3 --- Core Screens
-
--   Home
--   Create Call
--   Join Call
--   Waiting Room
--   Active Call
--   Call Ended
-
-## Phase 4 --- Motion
-
--   Page transitions
--   Call connection animation
--   Video transitions
--   Control animations
--   Bottom sheets
--   Toasts
-
-## Phase 5 --- Responsive
-
--   Mobile portrait
--   Mobile landscape
--   Tablet
--   Desktop
--   Ultrawide
-
-## Phase 6 --- Accessibility
-
--   Keyboard
--   Screen readers
--   Contrast
--   Reduced motion
--   Touch targets
-
-## Phase 7 --- Performance
-
--   Animation profiling
--   Video rendering profiling
--   Mobile performance
--   Memory usage
--   Network state handling
-
-------------------------------------------------------------------------
-
-# 57. Final Quality Bar
-
-Before considering the UI complete, verify:
-
-### Visual
-
--   [ ] Looks premium without excessive decoration
--   [ ] Consistent spacing
--   [ ] Consistent radius
--   [ ] Consistent icons
--   [ ] Strong typography hierarchy
--   [ ] Dark mode polished
--   [ ] Light mode polished
-
-### Motion
-
--   [ ] Page transitions feel smooth
--   [ ] Call connection feels alive
--   [ ] Video joining/leaving is animated
--   [ ] Controls animate subtly
--   [ ] Reduced motion supported
-
-### Mobile
-
--   [ ] One-hand friendly
--   [ ] 44px+ touch targets
--   [ ] Safe-area support
--   [ ] Portrait works
--   [ ] Landscape works
--   [ ] No browser-like feeling
-
-### Video Call
-
--   [ ] Remote video is always the focus
--   [ ] Self-preview never blocks important content
--   [ ] Controls remain accessible
--   [ ] Camera-off state looks intentional
--   [ ] Mic-off state is obvious
--   [ ] Network problems are understandable
-
-### Performance
-
--   [ ] No unnecessary continuous animations
--   [ ] No expensive effects during calls
--   [ ] Smooth interaction while video is active
--   [ ] Works on mid-range mobile devices
-
-------------------------------------------------------------------------
-
-# 58. Design North Star
-
-Every design decision should answer this question:
-
-> **Does this make the conversation feel more natural, private, and
-> effortless?**
-
-If yes, keep it.
-
-If it only makes the interface look more complicated, remove it.
-
-The final product should feel like a **beautiful digital room for two
-people**, not a traditional video-conferencing dashboard.
+- [ ] Zero gradients / zero purple-blue in the codebase
+- [ ] 1366×768 call fits without scroll; dock never clips
+- [ ] Chrome hides in 3.5s, returns on any input, cursor follows
+- [ ] Every dock button: hover ring + tooltip + press scale + sound where specified
+- [ ] Join/leave/mute/unmute/end each sound correct; toggle silences all
+- [ ] Meters move when speaking on both ends; health panel reads true
+- [ ] Reduced-motion + keyboard-only + touch-only passes all pass

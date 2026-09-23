@@ -153,28 +153,26 @@ export function Button({
 }: ButtonProps) {
   const styles =
     variant === "primary"
-      ? "text-white shadow-[0_8px_30px_rgba(124,92,255,0.35)]"
+      ? "bg-[var(--action)] text-[var(--action-ink)]"
       : variant === "danger"
         ? "bg-[var(--danger)] text-white"
         : variant === "ghost"
           ? "bg-transparent text-[var(--text-secondary)] hover:text-white border border-[var(--border-subtle)]"
           : "bg-[var(--surface-elevated)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:bg-[var(--surface-hover)]";
-  const bg =
-    variant === "primary" ? "bg-[image:var(--gradient-accent)]" : "";
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className={`pressable min-h-[48px] rounded-[14px] px-6 text-[15px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${bg} ${styles} ${className}`}
+      className={`pressable min-h-[48px] rounded-[14px] px-6 text-[15px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${styles} ${className}`}
     >
       {children}
     </button>
   );
 }
 
-/* ——— IconButton — circular 52px call controls (§14) ——— */
+/* ——— IconButton — circular 52px call controls (§13) ——— */
 export function IconButton({
   children,
   onClick,
@@ -203,8 +201,8 @@ export function IconButton({
     <button
       onClick={onClick}
       aria-label={label}
-      title={label}
-      className={`pressable grid h-[52px] w-[52px] place-items-center rounded-full border border-[var(--border-subtle)] transition ${bg} ${className}`}
+      data-tip={label}
+      className={`pressable dock-btn grid h-[52px] w-[52px] place-items-center rounded-full border border-[var(--border-subtle)] transition ${bg} ${className}`}
     >
       {children}
     </button>
@@ -224,13 +222,13 @@ export function Avatar({
   const initial = (name.trim()[0] ?? "?").toUpperCase();
   const ring =
     state === "live"
-      ? "border-[var(--success)]"
+      ? "border-[var(--live)]"
       : state === "connecting"
-        ? "connect-pulse border-[var(--accent)]"
+        ? "connect-pulse border-[var(--text-muted)]"
         : "border-[var(--border-strong)]";
   return (
     <div
-      className={`grid place-items-center rounded-full border-2 bg-[image:var(--gradient-accent)] font-semibold text-white ${ring}`}
+      className={`grid place-items-center rounded-full border-2 bg-[var(--surface-elevated)] font-semibold text-white ${ring}`}
       style={{ width: size, height: size, fontSize: size * 0.36 }}
       aria-hidden
     >
@@ -251,13 +249,13 @@ export function StatusPill({
 }) {
   const bg =
     tone === "live"
-      ? "bg-[var(--success)] text-[#06281d] border-transparent"
+      ? "bg-[var(--live)] text-[#06281d] border-transparent"
       : tone === "warn"
-        ? "bg-[var(--warning)] text-[#2d1f00] border-transparent"
+        ? "bg-[var(--warn)] text-[#2d1f00] border-transparent"
         : tone === "danger"
           ? "bg-[var(--danger)] text-white border-transparent"
           : tone === "info"
-            ? "bg-[var(--info)] text-[#04182e] border-transparent"
+            ? "glass text-white"
             : "glass text-[var(--text-secondary)]";
   return (
     <span
@@ -353,7 +351,7 @@ export function VideoPlaceholder({
   connecting?: boolean;
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_50%_40%,rgba(124,92,255,0.16),transparent_60%),var(--surface)] p-8 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--surface)] p-8 text-center">
       <Avatar name={name} size={72} state={connecting ? "connecting" : "idle"} />
       <p className="text-sm font-semibold text-white">{name}</p>
       <p className="max-w-[26ch] text-xs leading-5 text-[var(--text-secondary)]">
@@ -374,7 +372,7 @@ export function LevelDots({ level, label }: { level: number; label: string }) {
           className="w-[3px] rounded-full transition-all"
           style={{
             height: 6 + i * 3,
-            background: i < lit ? "var(--success)" : "rgba(255,255,255,0.18)",
+            background: i < lit ? "var(--live)" : "rgba(255,255,255,0.18)",
           }}
         />
       ))}
@@ -394,7 +392,7 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-[20px] border border-[var(--border-subtle)] bg-white/[0.03] px-6 py-8 text-center">
-      <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
+      <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[var(--surface-elevated)] text-[var(--text-secondary)]">
         <Icons.Phone size={22} />
       </div>
       <p className="mt-2 text-sm font-semibold text-white">{title}</p>
