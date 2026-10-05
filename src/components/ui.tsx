@@ -272,16 +272,16 @@ export function StatusPill({
 /* ——— Toasts (§29) ——— */
 export type Toast = { id: number; text: string };
 
-export function ToastStack({ toasts }: { toasts: Toast[] }) {
+export function ToastStack({ toasts, position = "bottom" }: { toasts: Toast[]; position?: "top" | "bottom" }) {
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+96px)] z-50 flex flex-col items-center gap-2 px-4"
+      className={`pointer-events-none fixed inset-x-0 z-50 flex flex-col items-center gap-2 px-4 ${position === "top" ? "top-[calc(env(safe-area-inset-top)+132px)]" : "bottom-[calc(env(safe-area-inset-bottom)+96px)]"}`}
     >
       {toasts.map((t) => (
         <div
           key={t.id}
-          className="toast-in glass rounded-full px-4 py-2 text-[13px] font-medium text-white shadow-lg"
+          className="toast-in glass max-w-sm rounded-2xl px-4 py-2 text-center text-[13px] font-medium text-white shadow-lg"
         >
           {t.text}
         </div>
@@ -321,7 +321,7 @@ export function BottomSheet({
         className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
       />
       <div
-        className="sheet-in absolute inset-x-0 bottom-0 mx-auto w-full max-w-lg rounded-t-[24px] border border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-5 pb-[calc(env(safe-area-inset-bottom)+20px)]"
+        className="sheet-in absolute inset-x-0 bottom-0 mx-auto max-h-[calc(100dvh-env(safe-area-inset-top)-12px)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-[24px] border border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-5 pb-[calc(env(safe-area-inset-bottom)+20px)]"
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20" aria-hidden />
         <div className="mb-3 flex items-center justify-between">

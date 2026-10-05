@@ -149,6 +149,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [controlsHidden, setControlsHidden] = useState(false);
+  const [selfAspectRatio, setSelfAspectRatio] = useState(16 / 9);
+  const updateSelfAspectRatio = useCallback((video: HTMLVideoElement) => {
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      setSelfAspectRatio(video.videoWidth / video.videoHeight);
+    }
+  }, []);
   const [micPulse, setMicPulse] = useState(0);
   // Object-identity snapshots so meters/diagnostics re-run on swap.
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
@@ -1072,36 +1078,17 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     prevHasRemoteRef.current = hasRemote;
   }, [hasRemote]);
 
-  // Auto-hide controls when idle during a call (§12: quiet when idle).
-  // Touch users keep controls; mouse users reveal on movement.
-  // Note: render forces the dock visible unless status is connected, so no
-  // reset is needed here when leaving a call.
+  // Each connection starts with controls visible. The stage tap owns
+  // visibility so a touch/mouse event cannot immediately undo the toggle.
   useEffect(() => {
-    if (status !== "connected") return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const poke = () => {
-      setControlsHidden(false);
-      if (timer) clearTimeout(timer);
-      if (window.matchMedia("(pointer: fine)").matches) {
-        timer = setTimeout(() => setControlsHidden(true), 3500);
-      }
-    };
-    poke();
-    window.addEventListener("mousemove", poke);
-    window.addEventListener("touchstart", poke, { passive: true });
-    window.addEventListener("keydown", poke);
-    return () => {
-      window.removeEventListener("mousemove", poke);
-      window.removeEventListener("touchstart", poke);
-      window.removeEventListener("keydown", poke);
-      if (timer) clearTimeout(timer);
-    };
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset for external call transition
+    setControlsHidden(false);
   }, [status]);
 
   const friendly = error ? friendlyError(error) : null;
   const inCall = status === "connected" || (status === "connecting" && hasRemote);
-  // Full-chrome auto-hide: header, dock and caption leave together (§11).
-  const chromeHidden = controlsHidden && status === "connected";
+  // Only controls and labels toggle; both video elements stay visible.
+  const chromeHidden = controlsHidden && status === "connected" && !sheetOpen;
   // Connection snapshot for diagnostics — polled while the sheet is open
   // (refs can't be read during render).
   const [connState, setConnState] = useState<string | null>(null);
@@ -1122,18 +1109,34 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const speaking = remoteLevel > 0.08;
   const peerSilent =
     hasRemote && status === "connected" && remoteAudioTracks.length > 0 && !speaking;
+  const silenceNotifiedRef = useRef(false);
+  useEffect(() => {
+    if (status !== "connected" || !hasRemote) {
+      silenceNotifiedRef.current = false;
+      return;
+    }
+    if (!peerSilent || silenceNotifiedRef.current) return;
+    // Ignore normal pauses and notify only once per connection.
+    const timer = setTimeout(() => {
+      silenceNotifiedRef.current = true;
+      pushToast(setToasts, "No voice from peer — they may be muted.");
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [status, hasRemote, peerSilent]);
 
   return (
     <div className={`flex flex-1 flex-col ${inCall ? "h-dvh overflow-hidden" : "min-h-dvh"}`}>
       {/* Top bar — overlays the stage during a call (§13), hides with chrome (§11) */}
       <header
-        className={`z-20 flex shrink-0 items-center justify-between gap-3 px-4 pt-[calc(env(safe-area-inset-top)+12px)] transition-all duration-300 md:px-6 ${
+        inert={chromeHidden}
+        aria-hidden={chromeHidden}
+        className={`z-20 flex shrink-0 items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top)+12px)] transition-all duration-300 md:px-6 ${
           inCall
             ? `absolute inset-x-0 top-0 ${chromeHidden ? "pointer-events-none -translate-y-2 opacity-0" : "pointer-events-none"}`
             : ""
         }`}
       >
-        <div className={`flex min-w-0 items-center gap-2.5 ${inCall && !chromeHidden ? "pointer-events-auto" : ""}`}>
+        <div className={`flex min-w-0 items-center gap-2 ${inCall && !chromeHidden ? "pointer-events-auto" : ""}`}>
           <button
             onClick={handleLeave}
             aria-label="Leave call"
@@ -1141,8 +1144,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           >
             <Icons.Back size={17} />
           </button>
-          <div className="glass flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-3 pr-2">
-            <span className="truncate font-mono text-[13px] font-semibold tracking-wide" title={roomId}>
+          <div className="glass flex min-w-0 flex-col items-start gap-1 rounded-[18px] px-2 py-1.5 sm:flex-row sm:items-center sm:gap-2 sm:rounded-full sm:pl-3">
+            <span className="max-w-full truncate px-1 font-mono text-[11px] font-semibold tracking-wide sm:text-[13px]" title={roomId}>
               {roomId}
             </span>
             <StatusPill tone={statusMeta[status].tone} pulse={status === "waiting" || status === "connecting"}>
@@ -1201,9 +1204,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       <main
         className={
           inCall
-            ? `relative mx-3 mb-[calc(env(safe-area-inset-bottom)+12px)] min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] md:mx-4 ${
-                chromeHidden ? "stage-idle" : ""
-              }`
+            ? "call-stage relative min-h-0 flex-1 overflow-hidden bg-[var(--surface)] md:mx-4 md:mb-3 md:rounded-[24px] md:border md:border-[var(--border-subtle)]"
             : "flex min-h-0 flex-1 flex-col px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] md:px-6"
         }
       >
@@ -1362,18 +1363,28 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             {/* Hidden voice channel — the ONLY audible remote path. */}
             <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-            {/* Chrome block — fades as one unit when idle (§11) */}
+            <button
+              type="button"
+              aria-label={chromeHidden ? "Show call controls" : "Hide call controls"}
+              aria-controls="call-controls"
+              aria-expanded={!chromeHidden}
+              onClick={() => setControlsHidden((hidden) => !hidden)}
+              className="absolute inset-0 z-[1] h-full w-full touch-manipulation focus-visible:outline-offset-[-4px]"
+            />
+
+            {/* Presence fades independently of the persistent video preview. */}
             <div
+              inert={chromeHidden}
+              aria-hidden={chromeHidden}
               className={`pointer-events-none absolute inset-0 z-10 transition-all duration-300 ${
                 chromeHidden ? "opacity-0" : "opacity-100"
               }`}
             >
               {/* Presence + peer voice meter */}
-              <div className="absolute left-3 top-3 flex items-center gap-2">
+              <div className="call-presence absolute inset-x-3 flex flex-wrap items-center gap-2">
                 <span className="glass rounded-full px-3 py-1.5 text-[11px] font-medium text-white">
                   {hasRemote ? (isHost ? "Guest" : "Host") : "No one here yet"}
                 </span>
-                {hasRemote && <StatusPill tone="live" pulse>Live</StatusPill>}
                 {hasRemote && (
                   <span
                     className="glass flex items-center gap-2 rounded-full px-3 py-1.5"
@@ -1386,42 +1397,41 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                   </span>
                 )}
               </div>
-              {/* Self flags */}
-              <div className="absolute right-3 top-3 flex gap-1.5">
-                {!micOn && (
-                  <span className="rounded-full bg-[var(--danger)] px-2.5 py-1 text-[11px] font-medium text-white">
-                    You&apos;re muted
-                  </span>
-                )}
-                {!camOn && (
-                  <span className="glass rounded-full px-2.5 py-1 text-[11px] font-medium text-white">
-                    Camera off
-                  </span>
-                )}
-              </div>
+            </div>
 
-              {/* Floating self-preview — exact 16:9 card, label overlaid (§13) */}
-              <div className="pointer-events-auto absolute bottom-24 right-3 aspect-video w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36 md:w-44">
+            <div className="call-bottom pointer-events-none absolute inset-x-3 z-10 flex flex-col gap-3">
+              {/* Keep the same preview mounted and sized in both control states. */}
+              <div
+                className="call-preview relative shrink-0 self-end overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl"
+                style={{ aspectRatio: selfAspectRatio, width: `min(var(--self-preview-width), ${selfAspectRatio * 28}dvh)` }}
+              >
                 <video
                   ref={localVideoRef}
                   autoPlay
                   playsInline
                   muted
-                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-cover ${!camOn ? "invisible" : ""}`}
+                  onLoadedMetadata={(event) => updateSelfAspectRatio(event.currentTarget)}
+                  onResize={(event) => updateSelfAspectRatio(event.currentTarget)}
+                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-contain ${!camOn ? "invisible" : ""}`}
                 />
                 {!camOn && (
                   <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
                     <Avatar name="You" size={40} />
                   </div>
                 )}
-                <p className="scrim absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 px-2 py-1 text-center text-[10px] text-[var(--text-secondary)]">
+                <p aria-hidden={chromeHidden} className={`scrim absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 px-2 py-1 text-center text-[10px] text-[var(--text-secondary)] transition-opacity duration-300 ${chromeHidden ? "opacity-0" : "opacity-100"}`}>
                   You{!micOn ? " · muted" : ""}
                   {micOn && <LevelDots level={localLevel} label="Your mic level — speak to see it move" />}
                 </p>
               </div>
 
               {/* Dock + caption — bottom center, above safe area */}
-              <div className="absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+14px)] flex flex-col items-center gap-2">
+              <div
+                id="call-controls"
+                inert={chromeHidden}
+                aria-hidden={chromeHidden}
+                className={`call-dock flex min-w-0 flex-col items-center gap-2 transition-opacity duration-300 ${chromeHidden ? "opacity-0" : "opacity-100"}`}
+              >
                 <div className="glass pointer-events-auto flex items-center gap-2 rounded-full p-2 shadow-2xl">
                   <IconButton label={micOn ? "Mute microphone (M)" : "Unmute microphone (M)"} onClick={toggleMic} off={!micOn}>
                     <span key={micPulse} className="mic-pop grid place-items-center">
@@ -1438,18 +1448,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     <Icons.PhoneOff size={20} />
                   </IconButton>
                 </div>
-                <p className="scrim flex items-center gap-1.5 rounded-full px-3 py-1 text-center text-[11px] text-[var(--text-muted)]">
-                  <Icons.Lock size={11} /> Private call · nothing is recorded or stored
+                <p className="scrim flex max-w-full items-center gap-1.5 rounded-full px-3 py-1 text-center text-[11px] text-[var(--text-secondary)]">
+                  <Icons.Lock size={11} /> Private call<span className="hidden sm:inline"> · nothing is recorded or stored</span>
                 </p>
               </div>
             </div>
-
-            {/* Peer-silence hint lives outside the chrome so it surfaces even when hidden */}
-            {peerSilent && (
-              <p className="glass absolute bottom-28 left-3 z-20 max-w-[220px] rounded-[12px] px-3 py-2 text-[11px] leading-4 text-[var(--text-secondary)]">
-                No voice from peer right now — they may be muted, or their mic hears nothing. Check <b>More → Audio health</b>.
-              </p>
-            )}
           </>
         ) : (
           /* Pre-join connecting state — fixed height, never pushes past viewport */
@@ -1516,7 +1519,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         )}
       </main>
 
-      <ToastStack toasts={toasts} />
+      <ToastStack toasts={toasts} position="top" />
 
       {/* More sheet (§30) — technical details live here, not primary UI (§38) */}
       <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Call options">
