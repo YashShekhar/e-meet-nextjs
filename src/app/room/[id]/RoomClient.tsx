@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { MediaConnection, Peer } from "peerjs";
 import { isSoundOn, playSound, setSoundOn } from "@/lib/sounds";
+import { FloatingSelfView } from "@/components/FloatingSelfView";
 import {
   Avatar,
   BottomSheet,
@@ -1306,7 +1307,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                   autoPlay
                   playsInline
                   muted
-                  className="h-full w-full scale-x-[-1] bg-black object-cover"
+                  className="h-full w-full scale-x-[-1] bg-black object-contain"
                 />
                 {!camOn && (
                   <div className="absolute inset-0">
@@ -1349,7 +1350,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 playsInline
                 muted
                 controls={false}
-                className="join-in absolute inset-0 h-full w-full bg-black object-cover"
+                className="join-in absolute inset-0 h-full w-full bg-black object-contain"
               />
             ) : (
               <div className="absolute inset-0">
@@ -1399,32 +1400,29 @@ export default function RoomClient({ roomId }: { roomId: string }) {
               </div>
             </div>
 
-            <div className="call-bottom pointer-events-none absolute inset-x-3 z-10 flex flex-col gap-3">
-              {/* Keep the same preview mounted and sized in both control states. */}
-              <div
-                className="call-preview relative shrink-0 self-end overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl"
-                style={{ aspectRatio: selfAspectRatio, width: `min(var(--self-preview-width), ${selfAspectRatio * 28}dvh)` }}
-              >
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  onLoadedMetadata={(event) => updateSelfAspectRatio(event.currentTarget)}
-                  onResize={(event) => updateSelfAspectRatio(event.currentTarget)}
-                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-contain ${!camOn ? "invisible" : ""}`}
-                />
-                {!camOn && (
-                  <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
-                    <Avatar name="You" size={40} />
-                  </div>
-                )}
-                <p aria-hidden={chromeHidden} className={`scrim absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 px-2 py-1 text-center text-[10px] text-[var(--text-secondary)] transition-opacity duration-300 ${chromeHidden ? "opacity-0" : "opacity-100"}`}>
-                  You{!micOn ? " · muted" : ""}
-                  {micOn && <LevelDots level={localLevel} label="Your mic level — speak to see it move" />}
-                </p>
-              </div>
+            {/* Keep the preview mounted and movable in both control states. */}
+            <FloatingSelfView aspectRatio={selfAspectRatio}>
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                onLoadedMetadata={(event) => updateSelfAspectRatio(event.currentTarget)}
+                onResize={(event) => updateSelfAspectRatio(event.currentTarget)}
+                className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-contain ${!camOn ? "invisible" : ""}`}
+              />
+              {!camOn && (
+                <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">
+                  <Avatar name="You" size={40} />
+                </div>
+              )}
+              <p aria-hidden={chromeHidden} className={`scrim absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 px-2 py-1 text-center text-[10px] text-[var(--text-secondary)] transition-opacity duration-300 ${chromeHidden ? "opacity-0" : "opacity-100"}`}>
+                You{!micOn ? " · muted" : ""}
+                {micOn && <LevelDots level={localLevel} label="Your mic level — speak to see it move" />}
+              </p>
+            </FloatingSelfView>
 
+            <div className="call-bottom pointer-events-none absolute inset-x-3 z-10 flex flex-col gap-3">
               {/* Dock + caption — bottom center, above safe area */}
               <div
                 id="call-controls"
@@ -1480,7 +1478,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                   autoPlay
                   playsInline
                   muted
-                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-cover ${!camOn ? "invisible" : ""}`}
+                  className={`absolute inset-0 h-full w-full scale-x-[-1] bg-black object-contain ${!camOn ? "invisible" : ""}`}
                 />
                 {!camOn && (
                   <div className="absolute inset-0 grid place-items-center bg-[var(--surface-elevated)]">

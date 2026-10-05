@@ -240,27 +240,9 @@ body::before {
   }
 }
 
-/* Reserve separate rows for the header, presence, preview and controls. */
+/* Keep call chrome clear of the movable self-view. */
 .call-presence { top: calc(env(safe-area-inset-top) + 84px); }
 .call-bottom { bottom: calc(env(safe-area-inset-bottom) + 14px); }
-.call-preview { --self-preview-width: 112px; }
-
-@media (min-width: 640px) {
-  .call-preview { --self-preview-width: 144px; }
-}
-@media (min-width: 768px) {
-  .call-preview { --self-preview-width: 176px; }
-}
-
-@media (max-height: 500px) and (min-width: 600px) {
-  .call-bottom {
-    flex-direction: row-reverse;
-    align-items: flex-end;
-    justify-content: space-between;
-  }
-  .call-preview { --self-preview-width: 112px; }
-  .call-dock { margin-inline: auto; }
-}
 
 :focus-visible {
   outline: 2px solid var(--text-primary);
