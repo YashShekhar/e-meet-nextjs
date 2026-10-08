@@ -244,6 +244,27 @@ body::before {
 .call-presence { top: calc(env(safe-area-inset-top) + 84px); }
 .call-bottom { bottom: calc(env(safe-area-inset-bottom) + 14px); }
 
+.chat-video {
+  position: absolute;
+  z-index: 5;
+  top: calc(env(safe-area-inset-top) + 84px);
+  right: calc(env(safe-area-inset-right) + 12px);
+  width: clamp(144px, 30vw, 240px);
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+}
+.dock-btn[aria-expanded="true"]:hover {
+  background: var(--action);
+  color: var(--action-ink);
+}
+@media (max-width: 359px) {
+  .call-dock .dock-btn { width: 44px; height: 44px; }
+}
+@media (max-height: 500px) {
+  .chat-open .call-dock > p { display: none; }
+}
+
 :focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;

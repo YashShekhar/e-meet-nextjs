@@ -28,6 +28,26 @@
 .preview:active { cursor: grabbing; }
 .preview > * { pointer-events: none; }
 
+.expanded {
+  top: calc(env(safe-area-inset-top) + 12px);
+  bottom: calc(env(safe-area-inset-bottom) + 12px);
+}
+
+.compact {
+  top: calc(env(safe-area-inset-top) + 84px);
+  right: calc(env(safe-area-inset-right) + 12px);
+  bottom: auto;
+  left: auto;
+  width: clamp(144px, 30vw, 240px);
+  aspect-ratio: 16 / 9;
+}
+
+.compact .preview {
+  --preview-width: 64px;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
 @media (min-width: 640px) {
   .preview { --preview-width: 144px; }
 }

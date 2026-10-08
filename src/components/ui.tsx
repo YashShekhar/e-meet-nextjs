@@ -33,6 +33,12 @@ function Base({ size = 20, className, children }: IconProps & { children: ReactN
 }
 
 export const Icons = {
+  Chat: (p: IconProps) => (
+    <Base {...p}>
+      <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z" />
+      <path d="M7 9h8M7 13h5" />
+    </Base>
+  ),
   Mic: (p: IconProps) => (
     <Base {...p}>
       <rect x="9" y="2" width="6" height="12" rx="3" />

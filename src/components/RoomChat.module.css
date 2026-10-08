@@ -1,0 +1,42 @@
+.panel {
+  position: absolute;
+  z-index: 2;
+  inset: calc(env(safe-area-inset-top) + 84px) 0 calc(env(safe-area-inset-bottom) + 120px);
+  display: flex;
+  flex-direction: column;
+  padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+  max-width: 100%;
+}
+.heading {
+  flex-shrink: 0;
+  min-height: calc(clamp(144px, 30vw, 240px) * 9 / 16 + 16px);
+  padding-right: calc(clamp(144px, 30vw, 240px) + 12px);
+}
+.heading h2 { font-size: 20px; font-weight: 600; }
+.heading p { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 12px; }
+.messages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
+.empty { height: 100%; min-height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; color: var(--text-secondary); }
+.empty p { font-size: 15px; color: var(--text-primary); }
+.empty span { max-width: 32ch; font-size: 12px; }
+.message { width: fit-content; max-width: min(85%, 560px); margin: 0 0 12px; padding: 10px 14px; border-radius: 16px 16px 16px 4px; background: var(--surface-elevated); }
+.message > span { font-size: 10px; opacity: .65; }
+.message p { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.own { margin-left: auto; background: var(--action); color: var(--action-ink); border-radius: 16px 16px 4px 16px; }
+.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding-top: 10px; }
+.composer textarea { resize: none; min-height: 48px; max-height: 100px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-elevated); font: inherit; font-size: 16px; }
+.composer button { align-self: center; min-height: 48px; padding: 0 18px; border-radius: 14px; background: var(--action); color: var(--action-ink); font-size: 14px; font-weight: 600; }
+.composer button:disabled { opacity: .4; cursor: not-allowed; }
+.composer > p { grid-column: 1 / -1; font-size: 10px; color: var(--text-secondary); }
+.composer > p span { float: right; }
+@media (min-width: 768px) {
+  .messages, .composer { width: min(100%, 800px); margin-inline: auto; }
+}
+@media (max-height: 500px) {
+  .panel { top: calc(env(safe-area-inset-top) + 72px); bottom: calc(env(safe-area-inset-bottom) + 84px); }
+  .heading { min-height: 44px; display: flex; gap: 12px; align-items: center; }
+  .heading p { display: none; }
+  .messages { width: auto; margin: 0 calc(clamp(144px, 30vw, 240px) + 12px) 0 0; }
+  .composer textarea { height: 48px; }
+  .composer > p { display: none; }
+}

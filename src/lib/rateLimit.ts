@@ -1,6 +1,7 @@
-// Simple in-memory sliding window rate limiter (per IP)
-// For production, replace with Upstash Redis / Vercel KV
+// Best-effort fixed-window limiter per warm instance. On Vercel, use platform
+// Firewall rules for global abuse protection, especially when enabling TURN.
 type Entry = { count: number; resetAt: number };
+import { isIP } from "node:net";
 
 declare global {
   var __RATE_LIMIT__: Map<string, Entry> | undefined;
@@ -16,6 +17,10 @@ export function rateLimit(key: string, limit: number, windowMs: number): { ok: b
   const store = getStore();
   const entry = store.get(key);
   if (!entry || now > entry.resetAt) {
+    if (store.size >= 10000) {
+      for (const [expiredKey, value] of store) if (value.resetAt <= now) store.delete(expiredKey);
+      if (store.size >= 10000 && !store.has(key)) return { ok: false, remaining: 0, resetAt: now + windowMs };
+    }
     const resetAt = now + windowMs;
     store.set(key, { count: 1, resetAt });
     return { ok: true, remaining: limit - 1, resetAt };
@@ -37,10 +42,9 @@ if (!globalThis.__RATE_LIMIT__) {
 }
 
 export function getClientIp(req: Request): string {
-  const h = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim();
-  if (h) return h;
-  const cf = req.headers.get("cf-connecting-ip");
-  if (cf) return cf;
-  // NextRequest ip not available in edge without header
-  return "unknown";
+  // Trust only a single address header explicitly overwritten by your reverse proxy.
+  const header = process.env.VERCEL === "1" ? "x-vercel-forwarded-for" : process.env.TRUSTED_IP_HEADER;
+  if (!header) return "shared";
+  const value = req.headers.get(header)?.trim() ?? "";
+  return value.length <= 45 && isIP(value) ? value : "shared";
 }

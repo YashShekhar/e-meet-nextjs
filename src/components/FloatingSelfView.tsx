@@ -5,8 +5,10 @@ import styles from "./FloatingSelfView.module.css";
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
-export function FloatingSelfView({ aspectRatio, children }: {
+export function FloatingSelfView({ aspectRatio, controlsHidden = false, compact = false, children }: {
   aspectRatio: number;
+  controlsHidden?: boolean;
+  compact?: boolean;
   children: ReactNode;
 }) {
   // Fractions of the available travel keep the preview in bounds on rotation,
@@ -19,19 +21,19 @@ export function FloatingSelfView({ aspectRatio, children }: {
   } | null>(null);
 
   return (
-    <div className={styles.area}>
+    <div className={`${styles.area} ${controlsHidden ? styles.expanded : ""} ${compact ? styles.compact : ""}`}>
       <div
         className={styles.preview}
         role="group"
-        tabIndex={0}
+        tabIndex={compact ? -1 : 0}
         aria-label="Your video. Drag to move, or use the arrow keys."
         title="Drag to move your video"
         style={{
           "--preview-ratio": aspectRatio,
           aspectRatio,
-          left: `${position.x * 100}%`,
-          top: `${position.y * 100}%`,
-          transform: `translate(${-position.x * 100}%, ${-position.y * 100}%)`,
+          left: `${(compact ? 1 : position.x) * 100}%`,
+          top: `${(compact ? 1 : position.y) * 100}%`,
+          transform: `translate(${-(compact ? 1 : position.x) * 100}%, ${-(compact ? 1 : position.y) * 100}%)`,
         } as CSSProperties}
         onPointerDown={(event) => {
           if (!event.isPrimary || event.button !== 0 || drag.current) return;

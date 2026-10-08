@@ -32,5 +32,5 @@ export default async function Page({
   if (decoded.includes("/") || decoded.includes(".") || decoded.includes(" ")) {
     notFound();
   }
-  return <RoomClient roomId={decoded} />;
+  return <RoomClient key={decoded} roomId={decoded} />;
 }

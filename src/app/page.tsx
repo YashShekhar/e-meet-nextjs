@@ -1,11 +1,11 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { newInviteKey } from "@/lib/callCrypto";
+import { invitationFragment, parseInvitation } from "@/lib/invitation";
 import {
   Avatar,
   Button,
-  EmptyState,
   Icons,
   StatusPill,
 } from "@/components/ui";
@@ -31,107 +31,46 @@ function generateSecureRoomId(): string {
   return `${id.slice(0, 6)}-${id.slice(6)}`;
 }
 
-function normalizeRoomId(input: string): string {
-  // Strict: no silent stripping — just trim + uppercase; validation will reject invalid chars
-  return input.trim().toUpperCase();
-}
-
-type Recent = { id: string; at: number; role: "host" | "guest" };
-
-function loadRecents(): Recent[] {
-  try {
-    const raw = localStorage.getItem("emeet_recents");
-    if (!raw) return [];
-    const arr = JSON.parse(raw) as Recent[];
-    return Array.isArray(arr) ? arr.slice(0, 5) : [];
-  } catch {
-    return [];
-  }
-}
-
 export default function Home() {
-  const router = useRouter();
   const [joinId, setJoinId] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [recents, setRecents] = useState<Recent[]>([]);
-
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is external, unreadable during SSR
-    setRecents(loadRecents());
+    // Remove credentials and room history retained by older app versions.
+    try {
+      localStorage.removeItem("emeet_recents");
+      Object.keys(localStorage).filter((key) => key.startsWith("host_token_")).forEach((key) => localStorage.removeItem(key));
+    } catch {}
   }, []);
 
-  const remember = (id: string, role: "host" | "guest") => {
-    try {
-      const next = [{ id, at: Date.now(), role }, ...loadRecents()].slice(0, 5);
-      localStorage.setItem("emeet_recents", JSON.stringify(next));
-    } catch {}
-  };
-
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (creating) return;
     setCreating(true);
     setCreateError(null);
-    // Try up to 3 unique IDs if collision (410 deleted or 409 exists)
-    for (let attempt = 0; attempt < 3; attempt++) {
+    try {
       const id = generateSecureRoomId();
-      try {
-        const res = await fetch("/api/rooms", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          // Persist host token for authenticated delete (cookie already set, localStorage fallback)
-          if (data.hostToken) {
-            try { localStorage.setItem(`host_token_${id}`, data.hostToken); } catch {}
-          }
-          remember(id, "host");
-          router.push(`/room/${encodeURIComponent(id)}?host=true`);
-          setTimeout(() => setCreating(false), 2000);
-          return;
-        }
-        // 410 deleted → never reusable, generate new; 409 exists → retry
-        if (res.status === 410 || res.status === 409) {
-          if (attempt === 2) {
-            setCreateError("That room code collided — try again.");
-            setCreating(false);
-            return;
-          }
-          continue;
-        }
-        setCreateError("We couldn't create the call. Check your connection and try again.");
-        setCreating(false);
-        return;
-      } catch {
-        setCreateError("We couldn't create the call. Check your connection and try again.");
-        setCreating(false);
-        return;
-      }
+      const key = newInviteKey();
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- avoid retaining secrets in the client router cache
+      window.location.assign(`/room/${id}?host=true#key=${key}`);
+    } catch {
+      setCreateError("A current browser with secure randomness is required.");
+      setCreating(false);
     }
-    setCreating(false);
   };
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     setJoinError(null);
-    const trimmed = normalizeRoomId(joinId);
-    if (!trimmed) {
-      setJoinError("Enter a room code to join.");
-      return;
-    }
-    if (trimmed.length !== ROOM_ID_MAX_LEN) {
-      setJoinError(`Room codes are ${ROOM_ID_MAX_LEN} characters, like A1B2CD-X9Y2.`);
-      return;
-    }
-    if (!ROOM_ID_REGEX.test(trimmed)) {
-      setJoinError("That code doesn't look right — letters, numbers and one hyphen only.");
-      return;
-    }
-    remember(trimmed, "guest");
-    router.push(`/room/${encodeURIComponent(trimmed)}`);
+    try {
+      const invitation = new URL(joinId.trim());
+      const secret = parseInvitation(invitation.hash);
+      const id = invitation.pathname.split("/")[2] || "";
+      if (invitation.origin !== window.location.origin || !ROOM_ID_REGEX.test(id)) throw new Error();
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- discard the home page's secret-bearing input state
+      window.location.assign(`/room/${id}#${invitationFragment(secret)}`);
+    } catch { setJoinError("Paste the complete secret invite link from your host."); }
+
   };
 
   return (
@@ -201,7 +140,7 @@ export default function Home() {
             </div>
 
             <div className="mt-6 flex flex-wrap gap-2 text-[11px] text-[var(--text-muted)]">
-              {['No sign-up', 'P2P encrypted', 'Nothing stored'].map((item) => (
+              {['No sign-up', 'End-to-end encrypted', 'Chat cleared on exit'].map((item) => (
                 <span key={item} className="futuristic-chip rounded-full px-3 py-1.5">
                   {item}
                 </span>
@@ -228,22 +167,22 @@ export default function Home() {
             <section className="panel rounded-[24px] p-5 md:p-6">
               <h2 className="text-lg font-semibold tracking-[-0.04em]">Join a call</h2>
               <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
-                Enter the invite code your peer shared.
+                Paste the complete secret invite link your peer shared.
               </p>
               <form onSubmit={handleJoin} className="mt-4 flex flex-col gap-3" noValidate>
                 <input
                   value={joinId}
                   onChange={(e) => {
-                    setJoinId(e.target.value.toUpperCase());
+                    setJoinId(e.target.value);
                     if (joinError) setJoinError(null);
                   }}
-                  placeholder="e.g. A1B2CD-X9Y2"
-                  maxLength={ROOM_ID_MAX_LEN}
+                  placeholder="https://?/room/?#key=?"
+                  maxLength={512}
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={!!joinError}
-                  aria-label="Invite code"
-                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm uppercase tracking-[0.2em] outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-white/40"
+                  aria-label="Secret invite link"
+                  className="h-12 rounded-[14px] border border-[var(--border-subtle)] bg-[var(--background)] px-4 font-mono text-sm outline-none placeholder:font-sans placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-white/40"
                 />
                 <Button type="submit" variant="secondary" disabled={!joinId.trim()}>
                   Continue
@@ -256,40 +195,9 @@ export default function Home() {
               )}
             </section>
 
-            <section className="panel-soft rounded-[22px] p-4">
-              <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                Recent
-              </h2>
-              {recents.length === 0 ? (
-                <EmptyState
-                  title="No recent calls"
-                  body="Start a conversation and your recent calls will appear here."
-                />
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {recents.map((r) => (
-                    <li key={`${r.id}-${r.at}`}>
-                      <button
-                        onClick={() =>
-                          router.push(
-                            `/room/${encodeURIComponent(r.id)}${r.role === "host" ? "?host=true" : ""}`
-                          )
-                        }
-                        className="pressable flex w-full items-center gap-3 rounded-[16px] border border-[var(--border-subtle)] bg-white/[0.02] px-4 py-3 text-left"
-                      >
-                        <Avatar name={r.id} size={36} />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-mono text-[13px] font-semibold">{r.id}</span>
-                          <span className="block text-[11px] text-[var(--text-muted)]">
-                            {r.role === "host" ? "Hosted" : "Joined"} · {new Date(r.at).toLocaleDateString()}
-                          </span>
-                        </span>
-                        <Icons.Phone size={16} className="text-[var(--text-muted)]" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+            <section className="panel-soft rounded-[22px] p-4 text-xs leading-5 text-[var(--text-secondary)]">
+              Keep your invitation private. Anyone with the complete link can use its one guest slot.
+              Calls expire after two hours. Messages and encryption keys are cleared when the call ends.
             </section>
           </div>
         </div>
