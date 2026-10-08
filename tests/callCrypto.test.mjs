@@ -72,3 +72,21 @@ test('expired calls reject queued encryption and decryption even before a delaye
   await assert.rejects(host.encrypt({text:'too late'}));
   await assert.rejects(guest.acceptHello(host.hello));
 });
+
+test('concurrent replay attempts cannot both decrypt the same sequence',async(t)=>{
+  const {host,guest}=await pair(t);
+  await Promise.all([host.acceptHello(guest.hello),guest.acceptHello(host.hello)]);
+  const packet=await host.encrypt({text:'only once'});
+  const results=await Promise.allSettled([guest.decrypt(packet),guest.decrypt(packet)]);
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(results.filter(r=>r.status==='rejected').length,1);
+});
+
+test('disposal while handshake work is pending cannot restore keys or the verification code',async(t)=>{
+  const {host,guest}=await pair(t);
+  const pending=host.acceptHello(guest.hello);
+  host.dispose();
+  await assert.rejects(pending);
+  assert.equal(host.securityCode(),'');
+  await assert.rejects(host.encrypt({text:'late'}));
+});

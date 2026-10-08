@@ -244,6 +244,52 @@ body::before {
 .call-presence { top: calc(env(safe-area-inset-top) + 84px); }
 .call-bottom { bottom: calc(env(safe-area-inset-bottom) + 14px); }
 
+.call-header, .call-presence-layer, .call-dock {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 240ms var(--ease-standard), transform 280ms var(--ease-standard);
+}
+.call-header[data-hidden="true"], .call-presence-layer[data-hidden="true"] {
+  opacity: 0;
+  transform: translateY(-14px);
+}
+.call-dock[data-hidden="true"] {
+  opacity: 0;
+  transform: translateY(24px);
+  pointer-events: none;
+}
+.call-stage {
+  transition: margin 280ms var(--ease-standard), border-radius 280ms var(--ease-standard), border-color 280ms var(--ease-standard);
+}
+.audio-recovery {
+  position: absolute;
+  z-index: 30;
+  top: calc(env(safe-area-inset-top) + 84px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: center;
+}
+.audio-recovery button {
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--action);
+  color: var(--action-ink);
+  font-weight: 600;
+}
+
 .chat-video {
   position: absolute;
   z-index: 5;

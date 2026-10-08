@@ -30,8 +30,9 @@ export async function createSecureSession(options: {
   if (!/^04[a-f0-9]{128}$/.test(options.hostPublicKey) || !Number.isSafeInteger(options.expiresAt) || options.expiresAt <= Date.now()) throw new Error("Invalid host identity or expired invitation.");
   if (!validInviteKey(options.inviteKey)) throw new Error("Invalid invitation key.");
   const rawSecret = unhex(options.inviteKey);
-  let authKey: CryptoKey | null = await crypto.subtle.importKey("raw", rawSecret, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
-  rawSecret.fill(0);
+  let authKey: CryptoKey | null;
+  try { authKey = await crypto.subtle.importKey("raw", rawSecret, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]); }
+  finally { rawSecret.fill(0); }
   let ephemeral: CryptoKeyPair | null = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
   const role = options.isHost ? "host" : "guest";
   const hello: Hello = { v: 3, type: "hello", role, room: options.roomId, from: options.localPeerId, to: options.remotePeerId,
@@ -47,6 +48,7 @@ export async function createSecureSession(options: {
   let rx: CryptoKey | null = null;
   let sendSequence = 0;
   let receiveSequence = 0;
+  let decrypting = false;
   let transcript = "";
   let acceptedHello = "";
   let disposed = false;
@@ -74,14 +76,15 @@ export async function createSecureSession(options: {
           !await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, hostVerifier, decode64(other.proof), encoder.encode(body)))) throw new Error("Original host authentication failed.");
       const publicKey = await crypto.subtle.importKey("raw", decode64(other.publicKey), { name: "ECDH", namedCurve: "P-256" }, false, []);
       const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: publicKey }, ephemeral.privateKey, 256));
-      const material = await crypto.subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
-      shared.fill(0);
+      let material: CryptoKey;
+      try { material = await crypto.subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]); }
+      finally { shared.fill(0); }
       const transcriptBytes = await crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify(role === "host" ? [helloBody(hello), body] : [body, helloBody(hello)])));
-      transcript = hex(transcriptBytes);
       const derive = (direction: string) => crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: transcriptBytes,
         info: encoder.encode(`e-meet-v3:${direction}`) }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
       const [outgoing, incoming] = await Promise.all([derive(role), derive(role === "host" ? "guest" : "host")]);
       if (disposed) throw new Error("Call ended.");
+      transcript = hex(transcriptBytes);
       tx = outgoing; rx = incoming; ephemeral = null; authKey = null; acceptedHello = body;
       return true;
     },
@@ -89,27 +92,29 @@ export async function createSecureSession(options: {
     async encrypt(value: unknown): Promise<CipherPacket> {
       if (disposed || !tx || Date.now() >= expiresAt || sendSequence >= 1000000) throw new Error("Secure session is unavailable.");
       const plaintext = encoder.encode(JSON.stringify(value));
-      if (plaintext.length > 10000) throw new Error("Message too large.");
+      if (plaintext.length > 10000) { plaintext.fill(0); throw new Error("Message too large."); }
       const sequence = ++sendSequence;
       try {
         const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce(sequence), additionalData: aad(localPeerId, remotePeerId, sequence), tagLength: 128 }, tx, plaintext);
-        if (disposed) throw new Error("Call ended.");
+        if (disposed || Date.now() >= expiresAt) throw new Error("Call ended.");
         return { v: 3, type: "sealed", sequence, ciphertext: encode64(ciphertext) };
       } finally { plaintext.fill(0); }
     },
     async decrypt(value: unknown): Promise<unknown> {
-      if (disposed || !rx || Date.now() >= expiresAt || !value || typeof value !== "object") throw new Error("Secure session is unavailable.");
+      if (disposed || decrypting || !rx || Date.now() >= expiresAt || !value || typeof value !== "object") throw new Error("Secure session is unavailable.");
       const packet = value as CipherPacket;
       if (packet.v !== 3 || packet.type !== "sealed" || !Number.isSafeInteger(packet.sequence) || packet.sequence !== receiveSequence + 1 ||
           typeof packet.ciphertext !== "string" || packet.ciphertext.length > 14000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(packet.ciphertext)) throw new Error("Invalid or replayed message.");
-      const plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce(packet.sequence),
-        additionalData: aad(remotePeerId, localPeerId, packet.sequence), tagLength: 128 }, rx, decode64(packet.ciphertext)));
+      decrypting = true;
+      let plaintext: Uint8Array | undefined;
       try {
-        if (disposed) throw new Error("Call ended.");
+        plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce(packet.sequence),
+          additionalData: aad(remotePeerId, localPeerId, packet.sequence), tagLength: 128 }, rx, decode64(packet.ciphertext)));
+        if (disposed || Date.now() >= expiresAt) throw new Error("Call ended.");
         const decoded: unknown = JSON.parse(new TextDecoder().decode(plaintext));
         receiveSequence = packet.sequence;
         return decoded;
-      } finally { plaintext.fill(0); }
+      } finally { plaintext?.fill(0); decrypting = false; }
     },
     dispose() { disposed = true; tx = null; rx = null; authKey = null; ephemeral = null; transcript = ""; acceptedHello = ""; },
   };

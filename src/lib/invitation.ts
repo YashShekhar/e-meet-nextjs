@@ -6,6 +6,7 @@ export const validHostIdentity = (value: string) => /^04[a-f0-9]{128}$/.test(val
 export type Invitation = { key: string; host: string; expires: number };
 
 export function parseInvitation(fragment: string): Invitation {
+  if (fragment.length > 512) throw new Error("Invalid invitation.");
   const values = new URLSearchParams(fragment.replace(/^#/, ""));
   const key = values.get("key") || "";
   const host = values.get("host") || "";
@@ -42,7 +43,7 @@ export async function createAdmission(key: string, room: string, from: string, t
   return { nonce, mac: hex(await crypto.subtle.sign("HMAC", await admissionKey(key), admissionBody(room, from, to, expires, nonce))) };
 }
 export async function verifyAdmission(value: unknown, key: string, room: string, from: string, to: string, expires: number) {
-  if (!value || typeof value !== "object" || Date.now() >= expires) return false;
+  if (!value || typeof value !== "object" || from.length > 100 || to.length > 100 || Date.now() >= expires) return false;
   const { nonce, mac } = value as Record<string, unknown>;
   if (typeof nonce !== "string" || !/^[a-f0-9-]{36}$/.test(nonce) || typeof mac !== "string" || !/^[a-f0-9]{64}$/.test(mac)) return false;
   return crypto.subtle.verify("HMAC", await admissionKey(key), Uint8Array.from(mac.match(/../g)!, (byte) => parseInt(byte, 16)),

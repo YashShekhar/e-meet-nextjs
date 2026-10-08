@@ -10,6 +10,8 @@ Start a call, choose **Start & wait for guest**, and share the **complete secret
 
 The Chat control opens the conversation with video in a small box at the top right. Close chat to restore full video. Your preview can move across the screen when controls are hidden, and stays outside the controls when they are visible.
 
+Controls slide and fade when shown/hidden, with reduced-motion support. If the browser blocks or pauses incoming audio, tap **Enable call audio**. If playback is still silent, check the site's mute setting and the selected speaker/headphone output. Reconnecting camera/microphone preserves your mute choice.
+
 ## Deploy on Vercel
 
 1. Import the repository and select the **Next.js** framework preset.

@@ -7,6 +7,7 @@ import { mediaFingerprint, validInviteKey } from "./callCrypto";
 import { CALL_LIFETIME, createHostIdentity, hostPeerIdentity, invitationFragment, parseInvitation, createAdmission, verifyAdmission } from "./invitation";
 import { CHAT_HISTORY_LIMIT, createRoomChat, type ChatMessage } from "./roomChat";
 import { createEncryptedHistory } from "./chatHistory";
+import { createMediaReplacement } from "./mediaReplacement";
 
 export type CallStatus = "initializing" | "waiting" | "connecting" | "connected" | "ended" | "error";
 export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }: {
@@ -23,6 +24,7 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
   const [chatDraft, setChatDraft] = useState("");
   const [inviteLink, setInviteLink] = useState("");
   const [prepared, setPrepared] = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
@@ -35,6 +37,7 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
   const local = useRef<MediaStream | null>(null);
   const outgoing = useRef<MediaStream | null>(null);
   const authenticated = useRef(false);
+  const replacement = useRef<ReturnType<typeof createMediaReplacement> | null>(null);
   const choices = useRef({ mic: !joinMuted, cam: !joinCamOff });
   const stopSession = useRef<(reason?: string) => void>(() => {});
 
@@ -66,7 +69,18 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
     }).catch((reason) => {
       if (!cancelled) { setError(reason instanceof Error ? reason.message : "Use HTTPS and a current browser to start a secure call."); setStatus("error"); }
     });
-    return () => { cancelled = true; };
+    const onPageHide = () => {
+      cancelled = true;
+      // Cover pre-join tabs too, and commit the cleared UI before BFCache.
+      flushSync(() => {
+        stopSession.current();
+        inviteKey.current = ""; identity.current = null; preparation.current = null;
+        setInviteLink(""); setPrepared(false); setMessages([]); setChatDraft(""); setSecurityCode(null);
+        setError("This tab's session ended. Chat was cleared. Start a new call."); setStatus("error");
+      });
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => { cancelled = true; window.removeEventListener("pagehide", onPageHide); };
   }, [roomId, isHost]);
 
   // Next's client router (including development refresh) can restore its initial
@@ -83,6 +97,8 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
     let joining = false;
     let activeChat = false;
     const history = createEncryptedHistory(CHAT_HISTORY_LIMIT);
+    const devices = createMediaReplacement();
+    replacement.current = devices;
     let ice: RTCConfiguration | undefined;
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let expires: ReturnType<typeof setTimeout> | undefined;
@@ -94,6 +110,8 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
       if (deadline) clearTimeout(deadline);
       if (expires) clearTimeout(expires);
       authenticated.current = false;
+      devices.dispose();
+      replacement.current = null;
       history.dispose();
       // Stop all capture/senders before awaiting anything or updating UI.
       outgoing.current?.getTracks().forEach((track) => track.stop());
@@ -108,13 +126,10 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
       inviteKey.current = ""; identity.current = null; preparation.current = null;
       setInviteLink(""); setMessages([]); setChatDraft(""); setSecurityCode(null);
       setLocalStream(null); setRemoteStream(null);
+      setAudioBlocked(false);
       setStatus(reason ? "error" : "ended"); setError(reason ?? null);
     };
     stopSession.current = stop;
-    // Commit the cleared transcript before the browser can snapshot this page
-    // into its back/forward cache during navigation or tab closure.
-    const onPageHide = () => flushSync(() => stop());
-    window.addEventListener("pagehide", onPageHide);
     const attachCall = (media: MediaConnection) => {
       call.current = media;
       setStatus("connecting");
@@ -215,7 +230,7 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
         peer.current = instance;
         // Refuse unrelated data channels even before the authenticated transport mounts.
         instance.on("connection", (connection: DataConnection) => {
-          if (connection.label !== "e-meet-secure-v3" || connection.peer !== call.current?.peer) connection.close();
+          if (connection.serialization !== "raw" || connection.label !== "e-meet-secure-v3" || connection.peer !== call.current?.peer) connection.close();
         });
         instance.on("open", () => {
           if (stopped) return;
@@ -244,8 +259,24 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
       } catch (reason) { if (!stopped) stop(reason instanceof Error ? reason.message : "Could not start a secure call."); }
     };
     void init();
-    return () => { window.removeEventListener("pagehide", onPageHide); stop(); };
+    return () => stop();
   }, [entered, prepared, isHost, roomId, joinMuted, joinCamOff]);
+
+  const resumeAudio = useCallback(async () => {
+    const audio = remoteAudioRef.current;
+    if (!authenticated.current || !audio?.srcObject) return;
+    const source = audio.srcObject;
+    try {
+      audio.muted = false;
+      audio.volume = 1;
+      await audio.play();
+      if (authenticated.current && audio.srcObject === source) setAudioBlocked(audio.paused);
+    } catch {
+      // Autoplay rejection is recoverable through a real user gesture. Never
+      // silently leave the user in a connected call with inaudible peer audio.
+      if (authenticated.current && audio.srcObject === source) setAudioBlocked(true);
+    }
+  }, []);
 
   useEffect(() => {
     const attach = (element: HTMLMediaElement | null, stream: MediaStream | null) => {
@@ -254,10 +285,29 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
       if (stream) void element.play().catch(() => {});
     };
     attach(localVideoRef.current, localStreamState);
-    attach(remoteVideoRef.current, remoteStreamState ? new MediaStream(remoteStreamState.getVideoTracks()) : null);
-    // Never play unverified remote audio, either.
-    attach(remoteAudioRef.current, remoteStreamState && status === "connected" ? new MediaStream(remoteStreamState.getAudioTracks()) : null);
+    attach(remoteVideoRef.current, remoteStreamState && status === "connected" ? new MediaStream(remoteStreamState.getVideoTracks()) : null);
   }, [localStreamState, remoteStreamState, status]);
+
+  useEffect(() => {
+    const audio = remoteAudioRef.current;
+    if (!audio) return;
+    if (!remoteStreamState || status !== "connected") {
+      audio.pause(); audio.srcObject = null;
+      return;
+    }
+    audio.srcObject = new MediaStream(remoteStreamState.getAudioTracks());
+    const onPause = () => { if (authenticated.current && audio.srcObject) setAudioBlocked(true); };
+    const onPlaying = () => { if (authenticated.current && audio.srcObject) setAudioBlocked(false); };
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("error", onPause);
+    audio.addEventListener("playing", onPlaying);
+    void resumeAudio();
+    return () => {
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("error", onPause);
+      audio.removeEventListener("playing", onPlaying);
+    };
+  }, [remoteStreamState, status, resumeAudio]);
 
   const toggleMic = useCallback(() => {
     choices.current.mic = !choices.current.mic;
@@ -272,22 +322,23 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
     setCamOn(choices.current.cam);
   }, []);
   const reconnectDevices = useCallback(async () => {
-    if (!authenticated.current || !call.current) return;
+    const media = call.current;
+    const devices = replacement.current;
+    if (!authenticated.current || !media || !devices) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: { echoCancellation: true, noiseSuppression: true } });
-      if (!authenticated.current || !call.current) { stream.getTracks().forEach((track) => track.stop()); return; }
-      stream.getAudioTracks().forEach((track) => { track.enabled = choices.current.mic; });
-      stream.getVideoTracks().forEach((track) => { track.enabled = choices.current.cam; });
-      const previous = local.current;
-      local.current = stream;
-      for (const sender of call.current.peerConnection.getSenders()) {
-        const replacement = stream.getTracks().find((track) => track.kind === sender.track?.kind);
-        if (replacement) await sender.replaceTrack(replacement);
-      }
-      outgoing.current?.getTracks().forEach((track) => track.stop());
-      outgoing.current = stream;
-      previous?.getTracks().forEach((track) => track.stop());
-      setLocalStream(stream);
+      await devices.run({
+        acquire: () => navigator.mediaDevices.getUserMedia({ video: true, audio: { echoCancellation: true, noiseSuppression: true } }),
+        isCurrent: () => authenticated.current && call.current === media && replacement.current === devices,
+        senders: media.peerConnection.getSenders(),
+        commit: (stream) => {
+          outgoing.current?.getTracks().forEach((track) => track.stop());
+          local.current?.getTracks().forEach((track) => track.stop());
+          stream.getAudioTracks().forEach((track) => { track.enabled = choices.current.mic; });
+          stream.getVideoTracks().forEach((track) => { track.enabled = choices.current.cam; });
+          local.current = stream; outgoing.current = stream;
+          setLocalStream(stream);
+        },
+      });
     } catch { stopSession.current("Could not safely reconnect your devices. Chat has been cleared."); }
   }, []);
   const send = useCallback(async () => {
@@ -296,5 +347,5 @@ export function useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff }
   }, [chatDraft]);
   return { status, error, setError, micOn, camOn, localStreamState, remoteStreamState, securityCode, messages, chatDraft, setChatDraft,
     inviteLink, localVideoRef, remoteVideoRef, remoteAudioRef, toggleMic, toggleCam, reconnectDevices, send,
-    end: () => stopSession.current(), hasRemote: !!remoteStreamState, chatReady: status === "connected" };
+    end: () => stopSession.current(), hasRemote: !!remoteStreamState, chatReady: status === "connected", audioBlocked, resumeAudio, canJoin: prepared };
 }

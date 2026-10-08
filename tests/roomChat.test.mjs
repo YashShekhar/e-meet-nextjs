@@ -7,7 +7,7 @@ import { newInviteKey } from '../src/lib/callCrypto.ts';
 import { createHostIdentity } from "../src/lib/invitation.ts";
 
 class Connection extends EventEmitter {
-  type='data';label='e-meet-secure-v3';open=false;sent=[];dataChannel={bufferedAmount:0};
+  type='data';serialization='raw';label='e-meet-secure-v3';open=false;sent=[];dataChannel={bufferedAmount:0};
   send(packet) { this.sent.push(packet); const other=this.other;queueMicrotask(()=>{if(other.open)other.emit('data',packet);}); }
   close(){if(!this.open)return;this.open=false;this.emit('close');if(this.other.open){this.other.open=false;this.other.emit('close');}}
 }
@@ -69,4 +69,16 @@ test('buffered traffic cannot revive a session after browser suspension',{timeou
   await new Promise(r=>setTimeout(r,30));
   assert.ok(errors.length>0);
   assert.equal(messages.filter(m=>m.author==='peer').length,0);
+});
+
+test('unrelated or non-raw incoming channels cannot replace the authenticated channel',{timeout:5000},async(t)=>{
+  const {host,gp,messages}=await setup(t);
+  for(const change of [{serialization:'binary'},{peer:'outsider'},{label:'wrong'}]) {
+    let closed=false;
+    gp.emit('connection',{peer:'host',label:'e-meet-secure-v3',serialization:'raw',...change,close:()=>{closed=true;}});
+    assert.equal(closed,true);
+  }
+  assert.equal(await host.send('Channel intact'),true);
+  await new Promise(r=>setTimeout(r,30));
+  assert.ok(messages.some(m=>m.author==='peer'&&m.text==='Channel intact'));
 });

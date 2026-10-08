@@ -38,6 +38,9 @@ function friendlyError(raw: string): { title: string; body: string } {
       title: "Camera or mic is busy",
       body: "Another app may be using it. Close other call apps and try again.",
     };
+  if (r.includes("invitation") || r.includes("identity") || r.includes("authenticat") ||
+      r.includes("session ended") || r.includes("new call") || r.includes("expired"))
+    return { title: "Secure session unavailable", body: raw };
   if (r.includes("offline") || r.includes("not found") || r.includes("peer-unavailable") || r.includes("host"))
     return {
       title: "We couldn't reach the other person",
@@ -138,7 +141,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [joinCamOff, setJoinCamOff] = useState(false);
   const { status, error, setError, micOn, camOn, localStreamState, remoteStreamState, securityCode,
     messages, chatDraft, setChatDraft, inviteLink, localVideoRef, remoteVideoRef, remoteAudioRef,
-    toggleMic, toggleCam, reconnectDevices: handleReinit, send, end, hasRemote, chatReady } =
+    toggleMic, toggleCam, reconnectDevices: handleReinit, send, end, hasRemote, chatReady, audioBlocked, resumeAudio, canJoin } =
     useSecureRoom({ roomId, isHost, entered, joinMuted, joinCamOff });
   const [copied, setCopied] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -213,13 +216,16 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
   return (
     <div className={`flex flex-1 flex-col ${inCall ? "h-dvh overflow-hidden" : "min-h-dvh"}`}>
+      {/* One persistent playback element; it must not remount with call/chat UI. */}
+      <audio ref={remoteAudioRef} playsInline className="hidden" />
       {/* Top bar — overlays the stage during a call (§13), hides with chrome (§11) */}
       <header
         inert={chromeHidden}
         aria-hidden={chromeHidden}
-        className={`z-20 flex shrink-0 items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top)+12px)] transition-all duration-300 md:px-6 ${
+        data-hidden={chromeHidden}
+        className={`call-header z-20 flex shrink-0 items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top)+12px)] md:px-6 ${
           inCall
-            ? `absolute inset-x-0 top-0 ${chromeHidden ? "pointer-events-none -translate-y-2 opacity-0" : "pointer-events-none"}`
+            ? "absolute inset-x-0 top-0 pointer-events-none"
             : ""
         }`}
       >
@@ -290,8 +296,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         }
       >
         {!entered ? (
-          /* Pre-join choice — join tap unlocks remote-audio autoplay, and the
-             joiner decides upfront whether to be heard (no mid-call prompts) */
+          /* Decide whether to transmit microphone/camera before joining. */
           <div className="rise-in mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 overflow-y-auto py-6">
             <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--surface)] p-6 text-center md:p-7">
               <Avatar name={roomId} size={64} />
@@ -349,6 +354,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                     <span className="ml-auto text-[11px] text-[var(--text-muted)]">tap to toggle</span>
                   </button>
                   <Button
+                    disabled={!canJoin}
                     onClick={() => {
                       buzz(12);
                       playSound("join");
@@ -441,8 +447,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 />
               </div>
             )}
-            {/* Hidden voice channel — the ONLY audible remote path. */}
-            <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+            {audioBlocked && status === "connected" && (
+              <div className="audio-recovery" role="status">
+                <span>Your browser paused call audio.</span>
+                <button type="button" onClick={() => { void resumeAudio(); }}>Enable call audio</button>
+              </div>
+            )}
 
             <button
               type="button"
@@ -463,9 +473,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             <div
               inert={chromeHidden || chatOpen}
               aria-hidden={chromeHidden || chatOpen}
-              className={`pointer-events-none absolute inset-0 z-10 transition-all duration-300 ${
-                chromeHidden || chatOpen ? "opacity-0" : "opacity-100"
-              }`}
+              data-hidden={chromeHidden || chatOpen}
+              className="call-presence-layer pointer-events-none absolute inset-0 z-10"
             >
               {/* Presence + peer voice meter */}
               <div className="call-presence absolute inset-x-3 flex flex-wrap items-center gap-2">
@@ -514,7 +523,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                 id="call-controls"
                 inert={chromeHidden}
                 aria-hidden={chromeHidden}
-                className={`call-dock flex min-w-0 flex-col items-center gap-2 transition-opacity duration-300 ${chromeHidden ? "opacity-0" : "opacity-100"}`}
+                data-hidden={chromeHidden}
+                className="call-dock flex min-w-0 flex-col items-center gap-2"
               >
                 <div className="glass pointer-events-auto flex items-center gap-2 rounded-full p-2 shadow-2xl">
                   <IconButton label={micOn ? "Mute microphone (M)" : "Unmute microphone (M)"} onClick={toggleMic} off={!micOn}>
@@ -563,7 +573,6 @@ export default function RoomClient({ roomId }: { roomId: string }) {
                   }
                 />
               </div>
-              <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
               <div className="absolute bottom-3 right-3 aspect-video w-28 overflow-hidden rounded-[16px] border border-[var(--border-strong)] bg-black shadow-xl sm:w-36">
                 <video
                   ref={localVideoRef}

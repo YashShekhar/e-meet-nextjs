@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { newInviteKey } from "@/lib/callCrypto";
 import { invitationFragment, parseInvitation } from "@/lib/invitation";
 import {
@@ -42,6 +43,9 @@ export default function Home() {
       localStorage.removeItem("emeet_recents");
       Object.keys(localStorage).filter((key) => key.startsWith("host_token_")).forEach((key) => localStorage.removeItem(key));
     } catch {}
+    const clearInvitation = () => flushSync(() => { setJoinId(""); setJoinError(null); });
+    window.addEventListener("pagehide", clearInvitation);
+    return () => window.removeEventListener("pagehide", clearInvitation);
   }, []);
 
   const handleCreate = () => {
@@ -67,6 +71,7 @@ export default function Home() {
       const secret = parseInvitation(invitation.hash);
       const id = invitation.pathname.split("/")[2] || "";
       if (invitation.origin !== window.location.origin || !ROOM_ID_REGEX.test(id)) throw new Error();
+      flushSync(() => setJoinId(""));
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- discard the home page's secret-bearing input state
       window.location.assign(`/room/${id}#${invitationFragment(secret)}`);
     } catch { setJoinError("Paste the complete secret invite link from your host."); }

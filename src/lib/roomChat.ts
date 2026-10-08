@@ -31,6 +31,7 @@ export function createRoomChat(options: {
   let windowCount = 0;
   let receiveQueue = Promise.resolve();
   let sendQueue: Promise<unknown> = Promise.resolve();
+  let pendingSends = 0;
   const setup = createSecureSession({ ...options, localPeerId: peer.id }).then((value) => {
     if (disposed) { value.dispose(); throw new Error("Call ended."); }
     session = value;
@@ -49,10 +50,12 @@ export function createRoomChat(options: {
     if (!connection?.open) throw new Error("Channel closed.");
   };
   const sendEncrypted = (value: unknown) => {
+    if (disposed || pendingSends >= 32) return Promise.reject(new Error("Send queue closed or overloaded."));
+    pendingSends++;
     const operation = sendQueue.then(async () => {
       if (disposed || !session) throw new Error("Session closed.");
       sendWire(await session.encrypt(value));
-    });
+    }).finally(() => { pendingSends--; });
     sendQueue = operation.catch(() => {});
     return operation;
   };
@@ -61,7 +64,7 @@ export function createRoomChat(options: {
     if (!disposed && connection?.open && !ready) sendWire(secure.hello);
   };
   const attach = (next: DataConnection) => {
-    if (disposed || next.peer !== remotePeerId || next.label !== CHAT_LABEL || connection) { next.close(); return; }
+    if (disposed || next.serialization !== "raw" || next.peer !== remotePeerId || next.label !== CHAT_LABEL || connection) { next.close(); return; }
     connection = next;
     next.on("open", () => { void announce().catch(() => fail()); });
     next.on("close", () => fail());
