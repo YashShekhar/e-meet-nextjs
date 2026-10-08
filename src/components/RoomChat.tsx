@@ -62,7 +62,7 @@ export function RoomChat({ messages, ready, draft, onDraft, onSend, onClose }: {
         event.preventDefault();
         followLatest.current = true;
         onSend();
-        input.current?.focus();
+        input.current?.focus({ preventScroll: true });
       }}>
         <label className="sr-only" htmlFor="chat-message">Message</label>
         <textarea ref={input} id="chat-message" value={draft} onChange={(event) => onDraft(event.target.value)}

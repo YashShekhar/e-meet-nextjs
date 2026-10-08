@@ -6,6 +6,7 @@ import { isSoundOn, playSound, setSoundOn } from "@/lib/sounds";
 import { FloatingSelfView } from "@/components/FloatingSelfView";
 import { RoomChat } from "@/components/RoomChat";
 import { useSecureRoom } from "@/lib/useSecureRoom";
+import { useMobileChatViewport } from "@/lib/useMobileChatViewport";
 import {
   Avatar,
   BottomSheet,
@@ -155,7 +156,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const receivedMessages = messages.filter((message) => message.author === "peer").length;
   const unreadMessages = chatOpen ? 0 : Math.max(0, receivedMessages - readMessages);
   const toggleChat = () => {
-    if (chatOpen) chatButtonRef.current?.focus();
+    if (chatOpen) chatButtonRef.current?.focus({ preventScroll: true });
     setReadMessages(receivedMessages);
     setChatOpen((open) => !open);
     setControlsHidden(false);
@@ -213,9 +214,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const friendly = error ? friendlyError(error) : null;
   const inCall = status === "connected" || (status === "connecting" && hasRemote);
   const chromeHidden = controlsHidden && status === "connected" && !sheetOpen && !chatOpen;
+  const roomRef = useMobileChatViewport(inCall && chatOpen);
 
   return (
-    <div className={`flex flex-1 flex-col ${inCall ? "h-dvh overflow-hidden" : "min-h-dvh"}`}>
+    <div ref={roomRef} className={`flex flex-1 flex-col ${inCall ? "h-dvh overflow-hidden" : "min-h-dvh"}`}>
       {/* One persistent playback element; it must not remount with call/chat UI. */}
       <audio ref={remoteAudioRef} playsInline className="hidden" />
       {/* Top bar — overlays the stage during a call (§13), hides with chrome (§11) */}
@@ -238,7 +240,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
             <Icons.Back size={17} />
           </button>
           <div className="glass flex min-w-0 flex-col items-start gap-1 rounded-[18px] px-2 py-1.5 sm:flex-row sm:items-center sm:gap-2 sm:rounded-full sm:pl-3">
-            <span className="max-w-full truncate px-1 font-mono text-[11px] font-semibold tracking-wide sm:text-[13px]" title={roomId}>
+            <span className="call-room-code max-w-full truncate px-1 font-mono text-[11px] font-semibold tracking-wide sm:text-[13px]" title={roomId}>
               {roomId}
             </span>
             <StatusPill tone={statusMeta[status].tone} pulse={status === "waiting" || status === "connecting"}>

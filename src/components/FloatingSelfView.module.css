@@ -60,3 +60,12 @@
 @media (max-height: 500px) {
   .preview { --preview-width: 112px; }
 }
+
+:global([data-mobile-chat="true"]) .compact {
+  top: var(--mobile-chat-top);
+  width: var(--mobile-chat-video-width);
+  transition: none;
+}
+:global([data-mobile-chat="true"][data-compact-chat="true"]) .compact .preview {
+  --preview-width: 44px;
+}

@@ -23,7 +23,7 @@
 .message > span { font-size: 10px; opacity: .65; }
 .message p { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .own { margin-left: auto; background: var(--action); color: var(--action-ink); border-radius: 16px 16px 4px 16px; }
-.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding-top: 10px; }
+.composer { flex-shrink: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding-top: 10px; }
 .composer textarea { resize: none; min-height: 48px; max-height: 100px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-elevated); font: inherit; font-size: 16px; }
 .composer button { align-self: center; min-height: 48px; padding: 0 18px; border-radius: 14px; background: var(--action); color: var(--action-ink); font-size: 14px; font-weight: 600; }
 .composer button:disabled { opacity: .4; cursor: not-allowed; }
@@ -39,4 +39,40 @@
   .messages { width: auto; margin: 0 calc(clamp(144px, 30vw, 240px) + 12px) 0 0; }
   .composer textarea { height: 48px; }
   .composer > p { display: none; }
+}
+
+/* Follow the visible viewport, including keyboards that leave media queries unchanged. */
+:global([data-mobile-chat="true"]) .panel {
+  top: var(--mobile-chat-top);
+  bottom: var(--mobile-chat-bottom);
+  min-height: 0;
+  overflow: hidden;
+}
+:global([data-mobile-chat="true"]) .heading {
+  display: block;
+  min-height: calc(var(--mobile-chat-video-width) * 9 / 16 + 12px);
+  padding-right: calc(var(--mobile-chat-video-width) + 12px);
+}
+:global([data-mobile-chat="true"]) .messages {
+  width: 100%;
+  margin: 0;
+  touch-action: pan-y pinch-zoom;
+}
+:global([data-mobile-chat="true"]) .composer { width: 100%; }
+:global([data-mobile-chat="true"][data-compact-chat="true"]) .heading h2 { font-size: 16px; }
+:global([data-mobile-chat="true"][data-compact-chat="true"]) .heading p,
+:global([data-mobile-chat="true"][data-compact-chat="true"]) .composer > p { display: none; }
+:global([data-mobile-chat="true"][data-compact-chat="true"]) .composer { padding-top: 6px; }
+:global([data-mobile-chat="true"][data-compact-chat="true"]) .composer textarea { height: 48px; }
+@media (min-width: 600px) {
+  :global([data-mobile-chat="true"][data-compact-chat="true"]) .heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+  }
+  :global([data-mobile-chat="true"][data-compact-chat="true"]) .messages {
+    width: calc(100% - var(--mobile-chat-video-width) - 12px);
+    margin-right: auto;
+  }
 }
